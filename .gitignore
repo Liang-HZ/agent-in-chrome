@@ -1,0 +1,17 @@
+node_modules/
+# 零依赖项目，锁文件只会在 npm install 后凭空出现（内容是空的），别提交
+package-lock.json
+
+*.log
+.DS_Store
+dist/
+.idea/
+.vscode/
+.claude/settings.local.json
+
+# 安装时按本机路径生成
+native-host/launcher.sh
+# 前台归还 helper 的本机编译产物（源码在同目录，装机时现编）
+native-host/mac-foreground/aic-fg
+# 扩展私钥：泄露 = 别人可以冒充这个扩展 ID
+ext-key.pem

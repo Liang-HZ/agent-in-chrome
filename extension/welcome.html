@@ -1,0 +1,110 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Agent in Chrome — 还差一步</title>
+<!-- 扩展装好后自动打开的欢迎页：说明本机那一半还得跑一次安装命令，并给出两段
+     可一键复制的文本——终端里跑的那行 npx 命令，和「交给自己的 agent 代跑」的那句话。
+     页面是静态的，两个复制按钮的行为在 welcome.js 里（MV3 扩展页禁内联脚本）。 -->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --fg: #1b1e23;
+    --muted: #70757d;
+    --border: rgba(0, 0, 0, 0.09);
+    --code-bg: rgba(0, 0, 0, 0.055);
+    --accent: #2563eb;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181c;
+      --panel: #1f2126;
+      --fg: #e6e8eb;
+      --muted: #9aa0a8;
+      --border: rgba(255, 255, 255, 0.09);
+      --code-bg: rgba(255, 255, 255, 0.09);
+      --accent: #8ab4f8;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 48px 24px 72px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 28px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+  }
+  .card h2 { font-size: 15px; margin: 0 0 10px; }
+  .cmdrow { display: flex; gap: 8px; align-items: center; }
+  code.cmd {
+    flex: 1;
+    display: block;
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    user-select: all;
+  }
+  button {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 9px 14px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  .muted { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+</style>
+<main>
+  <h1>扩展装好了，还差本机那一半</h1>
+  <p class="lead">
+    Agent in Chrome 分两半：这个扩展（浏览器那一半）+ 本机组件（把你的 AI agent
+    和浏览器接起来的那一半）。浏览器扩展没有文件系统，装不了本机组件——这一行命令是唯一省不掉的一步。
+  </p>
+
+  <div class="card">
+    <h2>在终端里跑这一行（需要 Node.js）</h2>
+    <div class="cmdrow">
+      <code class="cmd" id="cmd">npx @liang-hz/agent-in-chrome@latest install</code>
+      <button id="copy">复制</button>
+    </div>
+    <p class="muted">
+      它会写各浏览器的 native host 清单、把 MCP server 注册到本机检测到的 agent
+      （Claude Code、Claude Desktop、Codex、Trae……），改动逐项打印、全部可逆。<b>不用重启 Chrome</b>——
+      装完扩展 30 秒内自动连上，等不及就点扩展图标里的「重连」。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>不想开终端？把这句话交给你的 AI agent</h2>
+    <div class="cmdrow">
+      <code class="cmd" id="agentline">帮我跑一下 npx @liang-hz/agent-in-chrome@latest install，装 Agent in Chrome 的本机组件</code>
+      <button id="copy2">复制</button>
+    </div>
+  </div>
+
+  <p class="muted">
+    验证：在 agent 里说「列一下我打开的标签页」，能列出来就说明整条链路通了。
+    详细文档见 <a href="https://agent-in-chrome.liangai.org" target="_blank">agent-in-chrome.liangai.org</a>。
+  </p>
+
+  <p class="muted">by Liang · <a href="https://liangai.org" target="_blank">liangai.org</a></p>
+</main>
+<script src="welcome.js"></script>

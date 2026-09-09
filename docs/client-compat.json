@@ -1,0 +1,23 @@
+{
+  "claude-code": {
+    "version": "2.1.204 (Claude Code)",
+    "verdict": "hot",
+    "protocolRefetch": true,
+    "gammaAtRequest": 2,
+    "testedAt": "2026-08-02"
+  },
+  "codex": {
+    "version": "codex-cli 0.135.0",
+    "verdict": "stale",
+    "protocolRefetch": false,
+    "gammaAtRequest": null,
+    "testedAt": "2026-08-02"
+  },
+  "kimi-cli": {
+    "version": "kimi, version 1.49.0",
+    "verdict": "stale",
+    "protocolRefetch": false,
+    "gammaAtRequest": null,
+    "testedAt": "2026-08-02"
+  }
+}

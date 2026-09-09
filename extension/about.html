@@ -1,0 +1,240 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Agent in Chrome — 属性与本机位置</title>
+<!-- 扩展的属性页（chrome-extension://<id>/about.html）：说明这个扩展是什么、
+     要哪些权限各做什么用、在本机写下哪些文件、以及此刻的版本与连接状态。
+     纯静态说明页，动态那几处（版本、扩展 ID、连接状态、更新提示）由 about.js 填，
+     左侧目录高亮与状态胶囊配色由 about-toc.js 管。 -->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfc;
+    --surf: #ffffff;
+    --fg: #14161a;
+    --mut: #6b7280;
+    --bd: #e6e8ec;
+    --bd2: #eef0f3;
+    --acc: #2563eb;
+    --ok: #16a34a;
+    --ok-bg: rgba(22, 163, 74, 0.1);
+    --warn: #b45309;
+    --warn-bg: #fdf6ec;
+    --warn-bd: #f0dcbd;
+    --note-bg: #f4f7fe;
+    --note-bd: #dbe5fb;
+    --code: #f2f3f5;
+    --thead: #fafbfc;
+    --navhi: #eef1f6;
+    --glass: rgba(251, 251, 252, 0.86);
+    --ring: rgba(37, 99, 235, 0.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171a;
+      --surf: #1c1f23;
+      --fg: #e8eaed;
+      --mut: #9aa0a8;
+      --bd: #383d45;
+      --bd2: #2d3137;
+      --acc: #5b93f7;
+      --ok: #4ade80;
+      --ok-bg: rgba(74, 222, 128, 0.12);
+      --warn: #f0b445;
+      --warn-bg: rgba(240, 180, 69, 0.09);
+      --warn-bd: rgba(240, 180, 69, 0.28);
+      --note-bg: rgba(91, 147, 247, 0.09);
+      --note-bd: rgba(91, 147, 247, 0.28);
+      --code: #262a30;
+      --thead: #1f2328;
+      --navhi: #282d34;
+      --glass: rgba(21, 23, 26, 0.82);
+      --ring: rgba(91, 147, 247, 0.45);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.65 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  }
+  a { color: var(--acc); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    background: var(--code);
+    border-radius: 5px;
+    padding: 1px 5px;
+    word-break: break-all;
+  }
+  .muted { color: var(--mut); }
+
+  .topbar { position: sticky; top: 0; z-index: 5; background: var(--glass); backdrop-filter: blur(10px); border-bottom: 1px solid var(--bd); }
+  .topbar .inner { max-width: 1080px; margin: 0 auto; padding: 14px 32px; display: flex; align-items: center; gap: 12px; }
+  .topbar img { width: 24px; height: 24px; flex: none; }
+  .brand { flex: 1; min-width: 0; }
+  .brand .name { font-size: 14.5px; font-weight: 650; }
+  .brand .where { font-size: 12px; color: var(--mut); }
+  .pill { flex: none; font-size: 12px; color: var(--mut); background: var(--code); border-radius: 99px; padding: 3px 10px; }
+  .pill.state { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ok); background: var(--ok-bg); }
+  .pill.state .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 36px 32px 96px; display: grid; grid-template-columns: 200px 1fr; gap: 48px; align-items: start; }
+  @media (max-width: 860px) {
+    .wrap { grid-template-columns: 1fr; gap: 28px; padding: 24px 20px 72px; }
+    nav.toc { position: static; }
+  }
+  nav.toc { position: sticky; top: 88px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+  nav.toc .t { padding: 0 10px 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; color: var(--mut); }
+  nav.toc a { padding: 6px 10px; border-radius: 7px; color: var(--mut); }
+  nav.toc a:hover { background: var(--navhi); color: var(--fg); text-decoration: none; }
+  nav.toc a.on { background: var(--navhi); color: var(--fg); font-weight: 600; }
+  nav.toc .id { margin: 14px 10px 0; padding-top: 14px; border-top: 1px solid var(--bd); font-size: 11.5px; line-height: 1.6; color: var(--mut); }
+  nav.toc .id code { background: none; padding: 0; font-size: 10.5px; color: var(--fg); }
+
+  .body { min-width: 0; }
+  h1 { margin: 0; font-size: 30px; line-height: 1.25; letter-spacing: -0.3px; }
+  .lede { margin: 10px 0 0; font-size: 15px; line-height: 1.7; color: var(--mut); max-width: 60ch; text-wrap: pretty; }
+  h2 { margin: 44px 0 4px; font-size: 19px; letter-spacing: -0.2px; scroll-margin-top: 96px; }
+  h2 + .say { margin: 0 0 16px; font-size: 13.5px; color: var(--mut); }
+  p { text-wrap: pretty; }
+  .prose { font-size: 14px; line-height: 1.75; max-width: 66ch; }
+
+  .note { margin: 22px 0 0; padding: 14px 16px; border: 1px solid var(--note-bd); background: var(--note-bg); border-radius: 10px; font-size: 13px; line-height: 1.65; }
+  .note code { background: var(--surf); border: 1px solid var(--note-bd); }
+  .warn { border-color: var(--warn-bd); background: var(--warn-bg); }
+  .warn b { color: var(--warn); }
+  .warn code { border-color: var(--warn-bd); }
+
+  .card { border: 1px solid var(--bd); border-radius: 12px; background: var(--surf); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: 0.4px; color: var(--mut); padding: 9px 16px; background: var(--thead); border-bottom: 1px solid var(--bd); white-space: nowrap; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--bd2); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.keep { white-space: nowrap; color: var(--mut); }
+  td.keep.forever { color: var(--warn); font-weight: 600; }
+  td code { white-space: nowrap; }
+
+  .rows > div { display: grid; grid-template-columns: 190px 1fr; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--bd2); }
+  .rows > div:last-child { border-bottom: none; }
+  .rows code { background: none; padding: 0; }
+  .rows .why { font-size: 13px; line-height: 1.6; }
+
+  ul { padding-left: 1.2em; margin: 12px 0 0; }
+  li { margin: 6px 0; }
+  .aside { margin: 12px 0 0; padding: 12px 14px; border-left: 2px solid var(--bd); font-size: 13px; line-height: 1.65; color: var(--mut); max-width: 66ch; }
+
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+  @media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
+  .duo .card { padding: 16px 18px; }
+  .duo .k { font-size: 12px; color: var(--mut); }
+  .duo .v { margin-top: 6px; font-size: 12.5px; line-height: 1.7; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 20px; font-size: 13px; }
+</style>
+
+<div class="topbar">
+  <div class="inner">
+    <img src="icons/icon-32.png" alt="" />
+    <div class="brand">
+      <div class="name">Agent in Chrome</div>
+      <div class="where">属性与本机位置</div>
+    </div>
+    <span class="pill state"><span class="dot"></span><span id="state">检查中…</span></span>
+    <span class="pill">v<span id="version">…</span></span>
+  </div>
+</div>
+
+<div class="wrap">
+  <nav class="toc">
+    <div class="t">本页内容</div>
+    <a class="on" href="#files">它在你本机写什么</a>
+    <a href="#perms">扩展权限逐条</a>
+    <a href="#net">网络出站</a>
+    <a href="#blind">哪些东西读不到</a>
+    <a href="#update">更新与来源</a>
+    <div class="id">扩展 ID<br /><code id="extid">…</code></div>
+  </nav>
+
+  <div class="body">
+    <h1>它在你电脑上动了什么</h1>
+    <p class="lede">全部摊开讲：写到哪些文件、要哪些权限、什么时候联网、哪些内容它读不到。</p>
+
+    <div class="note">
+      <b>想看你机器上的真实绝对路径？</b>终端跑 <code>npx @liang-hz/agent-in-chrome check</code>，
+      它会打印本机实际解析出的每个路径、权限位、以及连接令牌是否就位（不会打印令牌本身）。
+    </div>
+
+    <h2 id="files">它在你本机写什么</h2>
+    <p class="say">八处，全部在你的 home 目录和 agent 自己的配置里。</p>
+    <div class="card">
+      <table>
+        <tr><th>位置</th><th>内容</th><th>保留</th></tr>
+        <tr><td><code>~/.agent-in-chrome/</code></td><td>运行时代码副本、启动脚本</td><td class="keep">卸载时删除</td></tr>
+        <tr><td><code>~/.agent-in-chrome/token</code></td><td>本机连接令牌（<code>0600</code>）。没有它的本地进程连不上你的浏览器</td><td class="keep">卸载时删除</td></tr>
+        <tr><td><code>~/.agent-in-chrome/traces/</code></td><td>操作留痕：每步工具名、打码后入参、当时页面 URL 与标题</td><td class="keep">40 会话 / 7 天</td></tr>
+        <tr><td><code>~/.agent-in-chrome/screenshots/</code></td><td>agent 要求的截图</td><td class="keep">最近 100 张</td></tr>
+        <tr><td><code>~/.agent-in-chrome/cookies/</code></td><td>你显式要求导出的 cookie（目录 <code>0700</code>、文件 <code>0600</code>）</td><td class="keep forever">不自动清理</td></tr>
+        <tr><td><code>~/.agent-in-chrome/*.log</code></td><td>连接日志（不含页面内容）</td><td class="keep">不自动清理</td></tr>
+        <tr><td>各浏览器 <code>NativeMessagingHosts/</code></td><td>一份 host 注册清单 <code id="hostname">…</code></td><td class="keep">卸载时删除</td></tr>
+        <tr><td>你的 agent 的 MCP 配置</td><td>一条 server 注册（写前自动备份原文件）</td><td class="keep">卸载时移除</td></tr>
+      </table>
+    </div>
+
+    <div class="note warn" style="margin-top: 16px">
+      <b>cookie 导出是明文凭据</b><br />
+      只有你（或你让 agent）显式调用 <code>browser_cookies_export</code> 才会产生，用途是把登录态搬到另一个浏览器实例。默认只把文件路径返回给模型，不返回明文。<b>用完请自己删掉那个文件</b>——它不会自动过期。
+    </div>
+
+    <h2 id="perms">扩展权限逐条</h2>
+    <p class="say">manifest 里申请的每一项，以及它到底用来干什么。</p>
+    <div class="card rows">
+      <div><code>debugger</code><div class="why">核心机制：通过 Chrome 调试协议读页面、发可信输入事件。<b>接管期间页面顶部有关不掉的提示条</b>，这是 Chrome 的安全设计。</div></div>
+      <div><code>nativeMessaging</code><div class="why">与本机 MCP server 之间的唯一通道。</div></div>
+      <div><code>tabs</code> / <code>tabGroups</code><div class="why">列标签页；把 agent 开的页收进可见的彩色标签组。</div></div>
+      <div><code>scripting</code><div class="why">页面快照与元素定位的注入式管线。</div></div>
+      <div><code>storage</code><div class="why">会话-标签页归属表（浏览器会话存储，关浏览器即清）。</div></div>
+      <div><code>alarms</code><div class="why">service worker 被回收后自动拉起重连。</div></div>
+      <div><code>&lt;all_urls&gt;</code><div class="why">agent 要能操作你指定的任意站点；去哪由你的指令决定。</div></div>
+    </div>
+
+    <h2 id="net">网络出站</h2>
+    <p class="prose">产品自身<b>不向任何服务器发送数据</b>：没有遥测、没有统计、没有崩溃上报，全部是本机进程间通信。唯一例外是版本更新检查（向 npm 查询最新版本号），不携带任何本机信息，设 <code>AGENT_IN_CHROME_NO_UPDATE_NOTIFIER=1</code> 可关闭。agent 访问哪些网页，完全由你的指令决定。</p>
+
+    <h2 id="blind">哪些东西读不到</h2>
+    <ul class="prose">
+      <li>密码框、信用卡号、CVV、短信验证码的<b>值</b>不会出现在任何页面读取结果里，只报「已填写（N 字符）」。</li>
+      <li>操作留痕里输入的文本<b>只记长度</b>；Cookie、Authorization、token、api key 等字段一律打码。</li>
+    </ul>
+    <p class="aside">如实告知的边界：打码认的是「字段名像凭据」。agent 主动执行 JS 把 <code>document.cookie</code> 读进普通变量时，打码认不出来。</p>
+
+    <h2 id="update">更新与来源</h2>
+    <div class="duo">
+      <div class="card">
+        <div class="k">版本状态</div>
+        <p class="v muted" id="updateLine">检查中…</p>
+      </div>
+      <div class="card">
+        <div class="k">怎么更新</div>
+        <div class="v">
+          Git / npm 装的：跑 <code>npx @liang-hz/agent-in-chrome@latest install</code>。<br />
+          商店装的：走商店的常规更新。
+          <div style="margin-top: 8px; font-weight: 600">我们不会自动更新，由你决定。</div>
+        </div>
+      </div>
+    </div>
+    <div class="links">
+      <a href="https://github.com/Liang-HZ/agent-in-chrome" target="_blank">源码仓库 ↗</a>
+      <a href="https://agent-in-chrome.liangai.org/privacy" target="_blank">完整隐私政策 ↗</a>
+      <a href="https://github.com/Liang-HZ/agent-in-chrome/releases" target="_blank">更新说明 / Releases ↗</a>
+      <a href="https://github.com/Liang-HZ/agent-in-chrome/issues" target="_blank">报告问题 ↗</a>
+    </div>
+    <p class="muted" style="margin-top: 14px; font-size: 12px">Apache-2.0，全部开源可审计。 · by Liang ·
+      <a href="https://liangai.org" target="_blank">liangai.org</a></p>
+  </div>
+</div>
+
+<script src="update-check.js"></script>
+<script src="about.js"></script>
+<script src="about-toc.js"></script>

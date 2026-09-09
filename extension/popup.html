@@ -1,0 +1,350 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Agent in Chrome</title>
+<!-- 扩展弹窗的静态骨架：顶部是连接状态与版本，中间「接管中 / 偏好」两个分栏，
+     底部是常驻的维护动作（打开 agent 窗口、解除全部托管、关掉全部页面）。
+     这里只放结构和 id，内容由 popup.js 填、版式由 popup-ui.js 摆；两个脚本都是
+     经典脚本（非 module），唯一的约定就是这份 DOM 上的 id。 -->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --surf: #ffffff;
+    --sunk: #f4f5f7;
+    --fg: #14161a;
+    --mut: #6b7280;
+    --bd: #e6e8ec;
+    --bd2: #eef0f3;
+    --acc: #2563eb;
+    --accfg: #ffffff;
+    --knob: #ffffff;
+    --ring: rgba(37, 99, 235, 0.35);
+    --ok: #16a34a;
+    --ok-bg: rgba(22, 163, 74, 0.1);
+    --bad: #dc2626;
+    --bad-bg: rgba(220, 38, 38, 0.09);
+    --warn: #b45309;
+    --warn-bg: rgba(217, 119, 6, 0.12);
+    --chipfg: #1a73e8;
+    --chipbg: rgba(26, 115, 232, 0.1);
+    --sh: 0 1px 2px rgba(16, 24, 40, 0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1d21;
+      --surf: #212429;
+      --sunk: #282b31;
+      --fg: #e8eaed;
+      --mut: #9aa0a8;
+      --bd: #383d45;
+      --bd2: #2d3137;
+      --acc: #5b93f7;
+      --accfg: #0c1220;
+      --knob: #0c1220;
+      --ring: rgba(91, 147, 247, 0.45);
+      --ok: #4ade80;
+      --ok-bg: rgba(74, 222, 128, 0.12);
+      --bad: #f87171;
+      --bad-bg: rgba(248, 113, 113, 0.14);
+      --warn: #fbbf24;
+      --warn-bg: rgba(251, 191, 36, 0.12);
+      --chipfg: #8ab4f8;
+      --chipbg: rgba(138, 180, 248, 0.14);
+      --sh: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { width: 376px; }
+  body {
+    width: 376px;
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+  header { display: flex; align-items: center; gap: 9px; padding: 14px 16px 0; }
+  header img { width: 22px; height: 22px; flex: none; }
+  .htext { flex: 1; min-width: 0; }
+  h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: 0.1px; }
+  .status { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 11.5px; color: var(--mut); }
+  .status .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--ok); }
+  .status #state { color: var(--fg); }
+  .status.off .dot { background: var(--bad); }
+  .status.off #state { color: var(--bad); font-weight: 600; }
+  #summary:not(:empty)::before { content: "· "; }
+  #version { flex: none; font-size: 11px; color: var(--mut); background: var(--sunk); border-radius: 99px; padding: 2px 8px; }
+
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin: 13px 16px 0; padding: 3px; background: var(--sunk); border-radius: 9px; }
+  .seg button {
+    border: 0; border-radius: 7px; padding: 7px 8px; font: inherit; font-size: 12.5px; font-weight: 500;
+    background: transparent; color: var(--mut); cursor: pointer;
+  }
+  .seg button[aria-selected="true"] { background: var(--bg); color: var(--fg); font-weight: 650; box-shadow: var(--sh); }
+  .seg .badge { display: inline-block; margin-left: 3px; font-size: 10.5px; font-weight: 600; color: var(--mut); background: var(--sunk); border-radius: 99px; padding: 0 5px; }
+  .seg button[aria-selected="true"] .badge { background: var(--sunk); }
+  .seg .badge:empty { display: none; }
+
+  main { padding: 12px 16px 4px; }
+
+  #target > .sec-title { display: none; }
+  .sec-title { display: flex; align-items: center; gap: 6px; margin: 14px 2px 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.4px; color: var(--mut); }
+  .sec-title .count { font-weight: 400; letter-spacing: 0; }
+
+  .sess {
+    margin: 0 0 8px;
+    border-radius: 12px;
+    background: var(--surf);
+    border: 1px solid var(--bd);
+    box-shadow: var(--sh);
+    overflow: hidden;
+  }
+  .sess.bad { border-color: var(--bad-bg); }
+  .sess.warn { border-color: var(--warn-bg); }
+  .sess.dormant .label, .sess.dormant .tabrow { opacity: 0.72; }
+  .sess.orphan { border-style: dashed; }
+  .sess.orphan .sdot { opacity: 0.45; }
+  .sess-head {
+    display: flex; align-items: flex-start; gap: 9px; min-width: 0;
+    padding: 11px 12px 10px; border-left: 3px solid var(--sc, var(--acc));
+  }
+  .sess.bad .sess-head { background: var(--bad-bg); }
+  .sess.warn .sess-head { background: var(--warn-bg); }
+  .sess-head .sdot { display: none; }
+  .sess-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .sess-head .label { font-size: 13.5px; font-weight: 650; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-head .tabn { flex: none; margin-top: 1px; font-size: 11px; color: var(--mut); }
+  .sess-head .agent {
+    margin-top: 3px; font-size: 11px; line-height: 1.4; color: var(--mut);
+    max-width: 100%; display: flex; gap: 0 4px; min-width: 0; overflow: hidden; white-space: nowrap;
+  }
+  .sess-head .agent .who { flex: none; }
+  .sess-head .agent .ws { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .sess-head .agent.asess { display: block; margin-top: 0; opacity: 0.75; text-overflow: ellipsis; }
+  .chip { flex: none; margin-top: 1px; font-size: 10px; font-weight: 600; border-radius: 99px; padding: 1px 6px; }
+  .chip.orphan, .chip.dormant { background: var(--sunk); color: var(--mut); }
+  .chip.attention { color: var(--warn); background: var(--warn-bg); }
+  .chip.failed { color: var(--bad); background: var(--bad-bg); }
+  .chip.held { color: var(--warn); background: var(--warn-bg); align-self: center; }
+  .rel-btn {
+    flex: none; padding: 3px 9px; font: inherit; font-size: 11.5px; border-radius: 7px;
+    border: 1px solid var(--bd); background: transparent; color: var(--mut); cursor: pointer;
+  }
+  .rel-btn:hover { background: var(--sunk); color: var(--fg); }
+  .sess input[type="checkbox"] { flex: none; width: 14px; height: 14px; margin: 2px 0 0; accent-color: var(--acc); cursor: pointer; }
+  .sel-actions { display: flex; gap: 6px; padding: 0 12px 11px; }
+  .sel-actions button { flex: 1; padding: 6px 4px; font-size: 12px; }
+  .sel-actions .go { color: var(--bad); border-color: var(--bad-bg); }
+  .sel-actions .go:hover:not(:disabled) { background: var(--bad-bg); }
+  .sel-actions .go:disabled { opacity: 0.45; cursor: default; }
+
+  .tabrow {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+    padding: 8px 12px; background: var(--sunk); border-top: 1px solid var(--bd2);
+  }
+  .tabrow + .tabrow { border-top-color: var(--bd); }
+  .fav { width: 15px; height: 15px; flex: none; border-radius: 4px; }
+  .fav.fallback { display: flex; align-items: center; justify-content: center; background: var(--bd); color: var(--mut); font-size: 9px; }
+  .tmeta { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.4; }
+  .ttitle { color: var(--fg); }
+  .thost { color: var(--mut); }
+  .thost::before { content: " · "; }
+  .tby { color: var(--mut); opacity: .8; }
+
+  .empty { margin: 0 0 8px; padding: 16px 10px; border-radius: 12px; border: 1px dashed var(--bd); text-align: center; color: var(--mut); font-size: 12px; }
+  .drag-hint { margin: 11px 2px 0; font-size: 11px; line-height: 1.5; color: var(--mut); }
+
+  .diag { margin: 0 0 8px; padding: 11px 12px; border-radius: 12px; background: var(--bad-bg); border: 1px solid var(--bd); font-size: 12px; }
+  .diag b { display: block; margin-bottom: 2px; color: var(--bad); }
+  .diag code { display: block; margin-top: 5px; font-size: 11px; color: var(--mut); word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .group { border: 1px solid var(--bd); border-radius: 12px; background: var(--surf); box-shadow: var(--sh); overflow: hidden; }
+  .opt { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; cursor: pointer; }
+  .opt + .opt { border-top: 1px solid var(--bd2); }
+  .opt:hover { background: var(--sunk); }
+  .opt .opt-text { min-width: 0; flex: 1; display: block; }
+  .opt .opt-name { display: block; font-size: 12.5px; font-weight: 550; }
+  .opt .hint { display: block; font-size: 11px; line-height: 1.45; color: var(--mut); margin-top: 2px; }
+  .switch { position: relative; flex: none; width: 34px; height: 20px; margin-top: 1px; display: block; }
+  .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .switch .track { position: absolute; inset: 0; border-radius: 99px; background: var(--bd); transition: background 0.15s; }
+  .switch .track::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--knob); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28); transition: transform 0.15s;
+  }
+  .switch input:checked + .track { background: var(--acc); }
+  .switch input:checked + .track::after { transform: translateX(14px); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+  .tiers { display: block; }
+  .tiers label { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; cursor: pointer; }
+  .tiers label + label { border-top: 1px solid var(--bd2); }
+  .tiers label:hover { background: var(--sunk); }
+  .tiers input { margin: 2px 0 0; flex: none; accent-color: var(--acc); }
+  .tiers .tcol { min-width: 0; flex: 1; }
+  .tiers .tname { display: block; font-size: 12.5px; font-weight: 550; }
+  .tiers .tname .def { font-weight: 400; color: var(--mut); }
+  .tiers .thint { display: block; margin-top: 2px; font-size: 11px; line-height: 1.45; color: var(--mut); }
+  .tiers.off { opacity: 0.45; pointer-events: none; }
+  #cfghint { display: block; margin: 7px 2px 0; font-size: 11px; line-height: 1.5; color: var(--mut); }
+  #cfghint:empty { display: none; }
+
+  .cg-row { padding: 10px 12px; }
+  .cg-row + .cg-row { border-top: 1px solid var(--bd2); }
+  .cg-dom { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .cg-dom .d { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; }
+  .cg-dom .n { flex: none; font-size: 11px; color: var(--mut); }
+  .cg-who { margin-top: 2px; font-size: 11px; line-height: 1.4; color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cg-acts { display: flex; gap: 6px; margin-top: 8px; }
+  .cg-acts button { flex: 1; padding: 5px 4px; font-size: 11.5px; }
+  .cg-acts .ok { border-color: var(--acc); color: var(--acc); font-weight: 600; }
+  .cg-acts .ok:hover { background: var(--chipbg); }
+  .cg-row.granted { display: flex; align-items: center; gap: 8px; }
+  .cg-row.granted .d { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+  .cg-row.granted .rel-btn { margin: 0; }
+  .cg-tag { flex: none; font-size: 10px; font-weight: 600; border-radius: 99px; padding: 1px 6px; color: var(--warn); background: var(--warn-bg); }
+  #cghint { display: block; margin: 7px 2px 0; font-size: 11px; line-height: 1.5; color: var(--mut); }
+  #cghint:empty { display: none; }
+  code.path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; background: var(--sunk); border-radius: 4px; padding: 1px 4px; }
+
+  .bar { margin-top: 14px; padding: 10px 16px 12px; border-top: 1px solid var(--bd2); background: var(--surf); }
+  .bar-row { display: flex; gap: 8px; }
+  button { font: inherit; font-size: 12px; border-radius: 8px; border: 1px solid var(--bd); background: var(--sunk); color: inherit; cursor: pointer; }
+  button:hover { background: var(--bd2); }
+  #openwin {
+    flex: 1; border: 0; background: var(--acc); color: var(--accfg);
+    border-radius: 9px; padding: 9px 10px; font-size: 12.5px; font-weight: 600; text-align: center;
+  }
+  #openwin:hover { filter: brightness(1.06); background: var(--acc); }
+  .icon-btn {
+    flex: none; width: 40px; padding: 9px 0; background: var(--surf); color: var(--mut);
+    border-radius: 9px; line-height: 0; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { background: var(--sunk); color: var(--fg); }
+  .icon-btn.confirm { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+  .bar-row:has(#openwin[hidden]) #release { margin-left: auto; }
+  #closeall.danger {
+    display: block; width: 100%; margin-top: 8px; padding: 8px 12px; text-align: center;
+    background: transparent; color: var(--bad); border: 1px solid var(--bd);
+  }
+  #closeall.danger:hover { background: var(--bad-bg); }
+  #closeall.danger.confirm { background: var(--bad-bg); font-weight: 600; }
+  #reconnect {
+    margin-left: 6px; padding: 1px 8px; font-size: 11px; border-radius: 99px;
+    border: 1px solid var(--bd); background: var(--sunk); color: var(--fg);
+  }
+  #reconnect:hover { background: var(--bd2); }
+  #toast { margin-top: 8px; font-size: 12px; color: var(--mut); }
+
+  footer { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; font-size: 11px; }
+  footer .sig { margin-left: auto; }
+  footer a { color: var(--mut); text-decoration: none; }
+  footer a:hover { color: var(--fg); text-decoration: underline; }
+  #update { margin-left: auto; text-align: right; }
+  #update a { color: var(--acc); font-weight: 600; }
+</style>
+
+<header>
+  <img src="icons/icon-32.png" alt="" />
+  <div class="htext">
+    <h1>Agent in Chrome</h1>
+    <div id="status" class="status off">
+      <span class="dot"></span><span id="state">检查中…</span><span id="summary"></span>
+      <button id="reconnect" hidden title="断开再重建扩展和本机 agent 之间的通道，不用等 30 秒自动重连">立即重连</button>
+    </div>
+  </div>
+  <span id="version"></span>
+</header>
+
+<div class="seg" role="tablist">
+  <button id="tab-tasks" role="tab" aria-selected="true" aria-controls="pane-tasks">接管中 <span class="badge" id="tabcount"></span></button>
+  <button id="tab-prefs" role="tab" aria-selected="false" aria-controls="pane-prefs">偏好</button>
+</div>
+
+<main>
+  <div id="pane-tasks" role="tabpanel">
+    <div id="target"></div>
+  </div>
+
+  <div id="pane-prefs" role="tabpanel" hidden>
+    <div class="group">
+      <label class="opt">
+        <span class="opt-text">
+          <span class="opt-name">显示操作光标与接管光晕</span>
+          <span class="hint">在页面上画出 agent 正在点/输入的位置，给被接管的页面四边加一圈会话同色的光晕，并在接管期间拦下你的直接输入（提示先「手动接管」）。截图里不会出现它们。开了 Chrome 同步时，此偏好随你的账号在设备间漫游。</span>
+        </span>
+        <span class="switch"><input type="checkbox" id="cursor" /><span class="track"></span></span>
+      </label>
+      <label class="opt">
+        <span class="opt-text">
+          <span class="opt-name">agent 标签页开在独立窗口</span>
+          <span class="hint">之后新开的 agent 页都去一个专属窗口，这边的标签条不再被挤占。已开着的页不搬家，全程不会把你从当前画面上切走。开了 Chrome 同步时，此偏好随你的账号在设备间漫游。</span>
+        </span>
+        <span class="switch"><input type="checkbox" id="sepwin" /><span class="track"></span></span>
+      </label>
+    </div>
+
+    <div class="sec-title">工具档位</div>
+    <div class="group">
+      <div id="profile" class="tiers">
+        <label>
+          <input type="radio" name="tier" value="observe" />
+          <span class="tcol">
+            <span class="tname">观察</span>
+            <span class="thint">只读页面、截图、看网络、开自己的页并导航。不点、不填、不碰凭据。注意：导航也会以你的身份发 GET 请求，个别站点的退订/注销就是 GET。</span>
+          </span>
+        </label>
+        <label>
+          <input type="radio" name="tier" value="full" />
+          <span class="tcol">
+            <span class="tname">完全 <span class="def">· 默认</span></span>
+            <span class="thint">全部工具：点击/输入、执行代码、导出 Cookie、上传文件。</span>
+          </span>
+        </label>
+      </div>
+    </div>
+    <span id="cfghint"></span>
+    <div class="drag-hint">写入 <code class="path">~/.agent-in-chrome/config.json</code>，即时生效。</div>
+
+    <!-- 凭据借出：cookie 导出的按域授权。默认拒绝，名单只能从这里进（见 sw.js 的
+         cookieLoanGate）。有待授权时 #cgask 才出现，平时这一块只剩已授权列表 -->
+    <div class="sec-title" id="cgtitle">凭据借出</div>
+    <div class="group" id="cgask" hidden></div>
+    <div class="group" id="cggrants" hidden></div>
+    <span id="cghint"></span>
+  </div>
+</main>
+
+<div class="bar">
+  <div class="bar-row">
+    <button id="openwin" hidden title="切过去看 agent 在干什么、或者直接接管。它是个铺满屏幕的普通窗口，Cmd+` 也能来回切">打开 agent 窗口</button>
+    <button id="release" class="icon-btn" aria-label="解除全部托管"
+      title="解除全部托管：所有页面从所有会话解除接管，页面全保留；agent 需要重新接管才能继续">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <rect x="3" y="7.2" width="10" height="6.3" rx="1.5"/>
+        <path d="M5.5 7V4.8a2.5 2.5 0 0 1 4.9-.7"/>
+      </svg>
+    </button>
+    <button id="reload" class="icon-btn" aria-label="重载扩展"
+      title="重载扩展：改完代码点一下就生效；重载完看顶部版本号变没变">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.75"/>
+        <path d="M13.4 1.8v2.8h-2.8"/>
+      </svg>
+    </button>
+  </div>
+  <button id="closeall" class="danger" title="关掉所有 agent 自己开的标签页；你拖进标签组的页面只会归还给你，不会被关">关闭 agent 开的所有标签页</button>
+  <div id="toast" hidden></div>
+  <footer>
+    <a id="about" href="about.html" target="_blank">属性与本机位置</a>
+    <span id="update"></span>
+    <a class="sig" href="https://liangai.org" target="_blank">by Liang · liangai.org</a>
+  </footer>
+</div>
+
+<script src="update-check.js"></script>
+<script src="popup.js"></script>
+<script src="popup-ui.js"></script>

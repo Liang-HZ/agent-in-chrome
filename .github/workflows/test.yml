@@ -1,0 +1,36 @@
+name: 测试
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false # 一边红了也要看另一边的结果,否则分不清是平台问题还是逻辑问题
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+
+    name: ${{ matrix.os }} · Node ${{ matrix.node }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 环境
+        run: node -v && npm -v
+
+      - name: npm test
+        run: npm test

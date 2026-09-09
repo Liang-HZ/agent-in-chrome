@@ -1,0 +1,100 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Agent in Chrome — 专属窗口</title>
+<!-- agent 专属窗口的锚点页。在扩展弹窗里开启「agent 标签页开在独立窗口」后，
+     agent 新开的页都落进那个窗口，这一张钉在最左边不关：它在窗口就在，agent 的页
+     全关掉时窗口也不会被浏览器回收。页面本身只解释这个窗口是什么、怎么切过来、
+     不想要了怎么关。纯静态，没有脚本。 -->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfc;
+    --surf: #ffffff;
+    --fg: #14161a;
+    --mut: #6b7280;
+    --bd: #e6e8ec;
+    --bd2: #eef0f3;
+    --acc: #2563eb;
+    --code: #f2f3f5;
+    --sh: 0 1px 2px rgba(16, 24, 40, 0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171a;
+      --surf: #1c1f23;
+      --fg: #e8eaed;
+      --mut: #9aa0a8;
+      --bd: #383d45;
+      --bd2: #2d3137;
+      --acc: #5b93f7;
+      --code: #262a30;
+      --sh: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 40px 24px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  }
+  main {
+    max-width: 34rem;
+    padding: 28px 32px 30px;
+    background: var(--surf);
+    border: 1px solid var(--bd);
+    border-radius: 14px;
+    box-shadow: var(--sh);
+  }
+  .head { display: flex; align-items: center; gap: 12px; }
+  .head img { width: 28px; height: 28px; flex: none; }
+  h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.1px; }
+  .sub { margin: 2px 0 0; font-size: 12.5px; color: var(--mut); }
+  p { margin: 16px 0 0; text-wrap: pretty; }
+  .why {
+    margin-top: 18px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: var(--bg);
+    border: 1px solid var(--bd2);
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--mut);
+  }
+  .why b { color: var(--fg); }
+  kbd {
+    font: inherit;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--code);
+    border-radius: 5px;
+    padding: 1px 6px;
+  }
+  .off { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--bd2); font-size: 13px; color: var(--mut); }
+</style>
+<main>
+  <div class="head">
+    <img src="icons/icon-48.png" alt="" />
+    <div>
+      <h1>这个窗口归 Agent in Chrome</h1>
+      <p class="sub">agent 开的页都来这里，不挤你自己的标签条</p>
+    </div>
+  </div>
+
+  <p>
+    你在扩展弹窗里打开了「agent 标签页开在独立窗口」。这个窗口铺满整个屏幕，
+    <kbd>Cmd</kbd> <kbd>`</kbd> 或者在弹窗里点「打开 agent 窗口」就能切过来看进度、直接接管。
+  </p>
+
+  <div class="why">
+    <b>这一张是窗口的锚点页，钉在最左边。</b>
+    留着它，是为了 agent 的页全关掉之后这个窗口不会被 Chrome 顺手回收——否则下次就得重新建一个。
+    它在，窗口就一直在，agent 开多少页都只是往里加，你那边一点感觉都没有。
+  </div>
+
+  <div class="off">不想要独立窗口了：在扩展弹窗里关掉那个开关，然后直接关掉本窗口。</div>
+</main>

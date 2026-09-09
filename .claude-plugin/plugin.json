@@ -1,0 +1,32 @@
+{
+  "name": "agent-in-chrome",
+  "version": "0.55.0",
+  "description": "让 AI agent 操作你已经登录的那个 Chrome 标签页，复用现有登录态，无需另起一个空白浏览器。",
+  "author": {
+    "name": "Liang",
+    "email": "liang@liangai.org",
+    "url": "https://liangai.org"
+  },
+  "license": "Apache-2.0",
+  "skills": "skills",
+  "commands": "commands",
+  "mcpServers": {
+    "agent-in-chrome": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp/server.mjs"
+      ],
+      "env": {
+        "AGENT_IN_CHROME_TIMEOUT_MS": "${user_config.timeout_ms}"
+      },
+      "timeoutMs": 60000
+    }
+  },
+  "userConfig": {
+    "timeout_ms": {
+      "type": "string",
+      "default": "60000",
+      "description": "单次浏览器操作的等待上限（毫秒）。页面重、加载慢时可调大。注意：插件清单里那个 timeoutMs 是写死的 60000，且不支持 ${user_config.*} 插值（插件清单只对 command/args/env 做替换），所以调到 60000 以上时 agent 侧仍会在 60s 掐断这次工具调用。真要更长，改用非插件方式注册（npx @liang-hz/agent-in-chrome install）并设 AGENT_IN_CHROME_TIMEOUT_MS。"
+    }
+  }
+}

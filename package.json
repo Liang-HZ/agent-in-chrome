@@ -1,0 +1,46 @@
+{
+  "name": "@liang-hz/agent-in-chrome",
+  "version": "0.55.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "agent-in-chrome": "bin/agent-in-chrome.mjs"
+  },
+  "files": [
+    "bin/",
+    "mcp/",
+    "native-host/",
+    "extension/",
+    "scripts/",
+    "skills/",
+    "commands/",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "NOTICE",
+    "PRIVACY.md",
+    ".ext-id.txt",
+    "docs/CLI.md",
+    "docs/AGENTS.md",
+    "docs/client-compat.json"
+  ],
+  "description": "让 AI agent 操作你已经登录的那个 Chrome，而不是另起一个空白浏览器",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Liang-HZ/agent-in-chrome.git"
+  },
+  "homepage": "https://agent-in-chrome.liangai.org",
+  "bugs": "https://github.com/Liang-HZ/agent-in-chrome/issues",
+  "author": "Liang <liang@liangai.org> (https://liangai.org)",
+  "scripts": {
+    "install-plugin": "node scripts/install.mjs",
+    "check": "node scripts/install.mjs --check",
+    "uninstall": "node scripts/install.mjs --uninstall",
+    "test": "node scripts/test-sw.mjs && node scripts/test-agents.mjs && node scripts/test-install-skill.mjs && node scripts/test-identity.mjs && node scripts/test-config.mjs && node scripts/test-security.mjs && node scripts/test-borrow.mjs && node scripts/test-e2e-sweep.mjs && node scripts/test-foreground-guard.mjs && node scripts/test-update.mjs && node scripts/test-protocol.mjs && node scripts/e2e.mjs",
+    "fixture": "node scripts/fixture-server.mjs",
+    "prepublishOnly": "node scripts/guard-publish.mjs"
+  }
+}
