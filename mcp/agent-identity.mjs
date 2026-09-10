@@ -924,6 +924,94 @@ export function readAntigravityWorkspace(meta, local, { fs = fsMod, home = osMod
   return dir;
 }
 
+const AG_META_STEP = 23;
+const AG_META_FIELD = 30;
+const AG_TITLE_FIELD = 4;
+const AG_GOAL_FIELD = 19;
+const AG_TMP_PREFIX = "ag-title-";
+const AG_STEP_MAX = 64 << 10;
+const AG_STEP_ROWS = 16;
+const AG_OUT_MAX = 8 << 20;
+
+function agLenField(buf, field) {
+  let i = 0;
+  while (i < buf.length) {
+    const tag = readVarint(buf, i);
+    if (!tag) return null;
+    const num = Math.floor(tag.value / 8);
+    const wire = tag.value % 8;
+    if (num === 0) return null;
+    i = tag.next;
+    if (wire === 2) {
+      const len = readVarint(buf, i);
+      if (!len || len.next + len.value > buf.length) return null;
+      if (num === field) return buf.subarray(len.next, len.next + len.value);
+      i = len.next + len.value;
+    } else if (wire === 0) {
+      const v = readVarint(buf, i);
+      if (!v) return null;
+      i = v.next;
+    } else if (wire === 5) {
+      i += 4;
+    } else if (wire === 1) {
+      i += 8;
+    } else {
+      return null;
+    }
+  }
+  return null;
+}
+
+function agTitleFromRows(rows) {
+  let fallback = null;
+  for (const row of rows) {
+    const metaMsg = agLenField(row, AG_META_FIELD);
+    if (!metaMsg) continue;
+    const t = agLenField(metaMsg, AG_TITLE_FIELD);
+    if (t) {
+      const s = clip(t.toString("utf8"), 60);
+      if (s) return s;
+    }
+    if (fallback === null) {
+      const g = agLenField(metaMsg, AG_GOAL_FIELD);
+      if (g) fallback = clip(g.toString("utf8"), 60);
+    }
+  }
+  return fallback;
+}
+
+export function readAntigravitySessionTitle(meta, local, { fs = fsMod, home = osMod.homedir(), exec = execFileSync, tmpdir = osMod.tmpdir } = {}) {
+  const id = antigravityConversationId(meta);
+  if (!id) return null;
+  const db = path.join(antigravityDataDir(local?.clientCommand, { home }), "conversations", `${id}.db`);
+  return memoTitle(`ag:${id}`, () => {
+    if (fs.statSync(db).size > AG_DB_MAX) return null;
+    const dir = fs.mkdtempSync(path.join(tmpdir(), AG_TMP_PREFIX));
+    try {
+      const copy = path.join(dir, "conversation.db");
+      fs.copyFileSync(db, copy);
+      try {
+        if (fs.statSync(`${db}-wal`).size <= AG_DB_MAX) fs.copyFileSync(`${db}-wal`, `${copy}-wal`);
+      } catch {}
+      const out = exec(
+        process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3",
+        [copy, `select hex(step_payload) from steps where step_type = ${AG_META_STEP} and length(step_payload) <= ${AG_STEP_MAX} order by idx limit ${AG_STEP_ROWS}`],
+        { encoding: "utf8", timeout: 2000, maxBuffer: AG_OUT_MAX }
+      );
+      const rows = [];
+      for (const line of String(out || "").split("\n")) {
+        const hex = line.trim();
+        if (hex && /^(?:[0-9a-f]{2})+$/i.test(hex)) rows.push(Buffer.from(hex, "hex"));
+      }
+      return agTitleFromRows(rows);
+    } finally {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {}
+    }
+  });
+}
+
 /*
  * 现在这一刻的会话标题。
  *
@@ -940,6 +1028,8 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
   if (zc) return zc;
   const tr = readTraeSessionTitle(meta, { fs, dataDir: traeDataDir({ userDataDir: local.userDataDir, appDir: local.brandAppDir, env, fs, home }) });
   if (tr) return tr;
+  const ag = readAntigravitySessionTitle(meta, local, { fs, home, exec });
+  if (ag) return ag;
   const ds = dsh !== undefined ? dsh : readDshSession(local, { env, home, fs });
   if (ds?.title) return ds.title;
   const t = readHostSessionTitle(local.hostSessionId, { fs, home, env });

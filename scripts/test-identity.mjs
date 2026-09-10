@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +18,7 @@ import {
   antigravityDataDir,
   antigravityConversationId,
   readAntigravityWorkspace,
+  readAntigravitySessionTitle,
   readSessionIdentity,
   hasTty,
   walkSurface,
@@ -967,11 +969,210 @@ console.log("\n\x1b[1mAntigravity：数据目录自报 + 会话库里的工作�
     resetTitleMemo();
     const idn = readSessionIdentity(localFor(), { home, meta: metaFor(), tmp: path.join(home, "unused-tmp") });
     check("readSessionIdentity 接上了：工作区来自会话库", idn.workspace === "ag-wired" && idn.workspaceKind === "git", JSON.stringify(idn));
-    check("会话标题本地没有证据：返回 null，不猜", idn.title === null, JSON.stringify(idn));
+    check("库里没有 steps 表时标题是 null，工作区照旧", idn.title === null, JSON.stringify(idn));
     resetTitleMemo();
     const bare = readSessionIdentity(localFor(), { home, meta: { progressToken: "p1" }, tmp: path.join(home, "unused-tmp") });
     check("同一个客户端、帧里没有会话 id 时不盖工作区", bare.workspace === null, JSON.stringify(bare));
     fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  console.log("\n\x1b[1mAntigravity：会话库 steps 表里的会话标题\x1b[0m");
+  {
+    const SQLITE = process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3";
+    const pbInt = (field, n) => Buffer.concat([pbVarint(field * 8), pbVarint(n)]);
+    const pbSub = (field, buf) => Buffer.concat([pbVarint(field * 8 + 2), pbVarint(buf.length), buf]);
+    const stepPayload = ({ title, goal, metaMsg = true } = {}) =>
+      Buffer.concat([
+        pbInt(1, 23),
+        pbInt(4, 3),
+        pbStr(5, "run-instance-metadata"),
+        metaMsg
+          ? pbSub(
+              30,
+              Buffer.concat([
+                pbInt(9, 1),
+                title ? pbStr(4, title) : Buffer.alloc(0),
+                pbInt(12, 5),
+                goal ? pbStr(19, goal) : Buffer.alloc(0),
+                pbInt(24, 2),
+              ])
+            )
+          : Buffer.alloc(0),
+      ]);
+    const writeDb = (file, rows, { wal = false } = {}) => {
+      const sql = [
+        wal ? "PRAGMA journal_mode=WAL;" : "",
+        "CREATE TABLE steps (idx INTEGER, step_type INTEGER, status INTEGER, has_subtrajectory INTEGER, metadata BLOB, error_details BLOB, permissions BLOB, task_details BLOB, render_info BLOB, step_payload BLOB, step_format INTEGER);",
+        ...rows.map(([idx, type, payload]) => `INSERT INTO steps (idx, step_type, step_payload) VALUES (${idx}, ${type}, ${payload ? `x'${payload.toString("hex")}'` : "NULL"});`),
+      ].join("\n");
+      execFileSync(SQLITE, [file], { input: `${sql}\n`, encoding: "utf8" });
+    };
+    const dbPath = (home, id = ID) => path.join(home, ".gemini", "antigravity-ide", "conversations", `${id}.db`);
+    const titleOf = (home, meta = metaFor(), opts = {}) => {
+      resetTitleMemo();
+      return readAntigravitySessionTitle(meta, localFor(), { home, ...opts });
+    };
+    const agTmpLeft = () => fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith("ag-title-"));
+    const tmpBefore = agTmpLeft().length;
+
+    {
+      const home = agHome();
+      writeDb(dbPath(home), [
+        [3, 7, stepPayload({ title: "不是 23 行的标题", goal: "干扰" })],
+        [30, 23, stepPayload({ title: "后面那一个不算", goal: "续会话" })],
+        [10, 23, stepPayload({ metaMsg: false })],
+        [20, 23, stepPayload({ title: "商机判定反馈逻辑优化", goal: "帮我看一下商机判定这块" })],
+        [40, 23, stepPayload({ goal: "compaction 追加的行只有 f19" })],
+        [50, 23, null],
+      ]);
+      const t = titleOf(home);
+      check("有 f4：按 idx 升序取第一个 f30.f4", t === "商机判定反馈逻辑优化", String(t));
+      check("step_type ≠ 23 的行一概不读", t !== "不是 23 行的标题", String(t));
+      check("23 行里没有 f30 的照样往下走，不当成到头", t === "商机判定反馈逻辑优化", String(t));
+      check("别的会话 id 查不到自己的库：null", titleOf(home, metaFor("11111111-2222-3333-4444-555555555555")) === null);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+
+    {
+      const home = agHome();
+      const goal = "帮我把这个仓库里所有会话标题相关的实现整理一遍，然后写一份自足的文档给我看，要能直接照着做" + "尾巴".repeat(20);
+      writeDb(dbPath(home), [
+        [10, 23, stepPayload({ goal })],
+        [20, 23, stepPayload({ goal: "第二条的目标不该被取" })],
+      ]);
+      const t = titleOf(home);
+      check("一行 f4 都没有：兜底第一条 23 行的 f19", t === goal.slice(0, 60), String(t));
+      check("兜底值 clip 到 60（标题来自别人磁盘上的内容，外发前必截）", t.length === 60, String(t.length));
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+
+    {
+      const home = agHome();
+      writeDb(dbPath(home), [
+        [5, 23, stepPayload({ title: "小行里的标题", goal: "首条用户消息" })],
+        [301, 23, stepPayload({ goal: "上下文".repeat(200_000) })],
+      ]);
+      const t = titleOf(home);
+      check("库里有 1MB 以上的 compaction 行时照样取得到标题（hex 会撑爆默认 stdout 缓冲）", t === "小行里的标题", String(t));
+      const only = agHome();
+      writeDb(dbPath(only), [[301, 23, stepPayload({ goal: "上下文".repeat(200_000) })]]);
+      check("超大的 23 行不参与兜底，取不到就是 null", titleOf(only) === null);
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(only, { recursive: true, force: true });
+    }
+
+    {
+      const home = agHome();
+      const rows = [[1, 23, stepPayload({ title: "多行大库里的标题", goal: "x".repeat(60_000) })]];
+      for (let i = 2; i <= 16; i++) rows.push([i, 23, stepPayload({ goal: "y".repeat(60_000) })]);
+      writeDb(dbPath(home), rows);
+      check("16 行都贴着单行上限时（hex 近 2MB）仍取得到标题", titleOf(home) === "多行大库里的标题");
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+
+    {
+      const home = agHome();
+      writeDb(dbPath(home), []);
+      check("空表：null", titleOf(home) === null);
+      writeDb(dbPath(home, "22222222-3333-4444-5555-666666666666"), [[1, 7, stepPayload({ title: "别家 step_type" })]]);
+      check("一行 23 都没有：null", titleOf(home, metaFor("22222222-3333-4444-5555-666666666666")) === null);
+      check("库文件根本不存在：null，不抛", titleOf(home, metaFor("33333333-4444-5555-6666-777777777777")) === null);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+
+    {
+      let copies = 0;
+      let mkdtemps = 0;
+      let execs = 0;
+      const bigFs = {
+        statSync: () => ({ size: 300 * 1024 * 1024 }),
+        mkdtempSync: () => {
+          mkdtemps++;
+          return "/nope";
+        },
+        copyFileSync: () => {
+          copies++;
+        },
+        rmSync: () => {},
+      };
+      resetTitleMemo();
+      const t = readAntigravitySessionTitle(metaFor(), localFor(), {
+        fs: bigFs,
+        home: "/h",
+        exec: () => {
+          execs++;
+          return "";
+        },
+      });
+      check("超 256MB 的会话库：null，而且没拷、没建临时目录、没起 sqlite3", t === null && copies === 0 && mkdtemps === 0 && execs === 0, `copy=${copies} mkdtemp=${mkdtemps} exec=${execs}`);
+    }
+
+    {
+      let touched = 0;
+      const noFs = new Proxy(
+        {},
+        {
+          get: () => () => {
+            touched++;
+            throw new Error("不该碰盘");
+          },
+        }
+      );
+      const noExec = () => {
+        touched++;
+        throw new Error("不该起 sqlite3");
+      };
+      const run = (meta) => {
+        resetTitleMemo();
+        return readAntigravitySessionTitle(meta, localFor(), { fs: noFs, home: "/h", exec: noExec });
+      };
+      check("畸形 id：null，且一次文件读取都不发生", run({ "antigravity.google/conversation_id": "../../etc/passwd" }) === null && touched === 0, `touched=${touched}`);
+      check("id 带引号（SQL/路径注入形状）也在读盘前停住", run({ "antigravity.google/conversation_id": `${ID}'; drop table steps--` }) === null && touched === 0, `touched=${touched}`);
+      check("不是它家的帧：null，不读盘", run({ session_id: "sess_x" }) === null && touched === 0, `touched=${touched}`);
+      check("_meta 缺席不抛", run(null) === null && touched === 0, `touched=${touched}`);
+    }
+
+    {
+      const home = agHome();
+      writeDb(dbPath(home), [[1, 23, stepPayload({ title: "记住我" })]]);
+      resetTitleMemo();
+      const first = readAntigravitySessionTitle(metaFor(), localFor(), { home });
+      fs.rmSync(dbPath(home));
+      const again = readAntigravitySessionTitle(metaFor(), localFor(), { home });
+      check("查到过就记住，库读不到了也不改口", first === "记住我" && again === "记住我", `${first} / ${again}`);
+      resetTitleMemo();
+      check("resetTitleMemo() 之后重新问：库没了就是 null", readAntigravitySessionTitle(metaFor(), localFor(), { home }) === null);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+
+    {
+      const home = agHome();
+      writeDb(dbPath(home), [[1, 23, stepPayload({ title: "WAL 库也读得出" })]], { wal: true });
+      const before = fs.readFileSync(dbPath(home));
+      const t = titleOf(home);
+      check("WAL 模式的库读得出标题", t === "WAL 库也读得出", String(t));
+      check("原库字节不变（读的是拷贝件，没碰客户端的活文件）", Buffer.compare(before, fs.readFileSync(dbPath(home))) === 0);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+
+    {
+      const home = agHome();
+      const proj = path.join(home, "repos", "ag-titled");
+      fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
+      writeDb(dbPath(home), [[1, 23, stepPayload({ title: "排查待办记录异常", goal: "待办记录不对" })]]);
+      resetTitleMemo();
+      check("readSessionTitle 走到 Antigravity 这一支", readSessionTitle(localFor(), { home, env: {}, meta: metaFor() }) === "排查待办记录异常");
+      fs.appendFileSync(dbPath(home), agBytes(ID, proj));
+      resetTitleMemo();
+      const idn = readSessionIdentity(localFor(), { home, env: {}, meta: metaFor(), tmp: path.join(home, "unused-tmp") });
+      check("readSessionIdentity 一次拿到标题和工作区", idn.title === "排查待办记录异常" && idn.workspace === "ag-titled", JSON.stringify(idn));
+      resetTitleMemo();
+      const bare = readSessionIdentity(localFor(), { home, env: {}, meta: { progressToken: "p1" }, tmp: path.join(home, "unused-tmp") });
+      check("帧里没有会话 id 时标题也不盖", bare.title === null, JSON.stringify(bare));
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+
+    check("跑完 tmp 下没有 ag-title-* 残留（拷贝件用完即删）", agTmpLeft().length === tmpBefore, agTmpLeft().join(","));
   }
 }
 

@@ -23,7 +23,7 @@ by Liang · [liangai.org](https://liangai.org)
 
 Agent in Chrome 把 AI agent（Claude Code、Claude Desktop、Trae、Codex……）接到**你自己正在用的那个 Chrome** 上。它通过 [MCP](https://modelcontextprotocol.io) 暴露一套浏览器工具，让 agent 能读页面、点按钮、填表单、抓网络请求——全部带着你现有的登录态，全部在后台进行，不抢你的前台。
 
-**和别的方案怎么选？** 下面只对比**开箱即有的原生能力**：✅ = 不写代码就能用，❌ = 不具备（多数工具带任意代码执行的逃生舱，理论上都能自己补——若把那也算上，所有格子都是 ✅，表格就没有意义了）。基于 2026-08-18 的源码通读与本机实测，版本：@playwright/mcp 0.0.79 · chrome-devtools-mcp 1.7.0 · browser-use 0.13.8 · ego lite 0.4.6.14。不做推荐，按你的场景自取。
+**和别的方案怎么选？** 下面只对比**开箱即有的原生能力**：✅ = 不写代码就能用，❌ = 不具备（多数工具带任意代码执行的逃生舱，理论上都能自己补——若把那也算上，所有格子都是 ✅，表格就没有意义了）。基于 2026-08-18 的源码通读与本机实测（Playwright MCP、browser-use、ego lite 三列于 2026-09-10 以同一套任务书与专项探针逐格复测：Playwright MCP 与 ego lite 的任务完成度与 agent-in-chrome / chrome-devtools-mcp 同档，browser-use 实测出工具面缺口，见脚注），版本：@playwright/mcp 0.0.80 · chrome-devtools-mcp 1.7.0 · browser-use 0.13.10 · ego lite 0.5.0.28。不做推荐，按你的场景自取。
 
 | | Agent in Chrome | Playwright MCP | Chrome DevTools MCP | browser-use | ego lite |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -33,16 +33,16 @@ Agent in Chrome 把 AI agent（Claude Code、Claude Desktop、Trae、Codex……
 | 走 MCP 协议 | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Windows / Linux | ✅⁵ | ✅ | ✅ | ✅ | ❌ |
 | Firefox / WebKit | ❌ | ✅ | ❌ | ❌ | ❌ |
-| 网络原始头 + 请求/响应体 | ✅ | ✅ | ✅ | ❌ | ❌ |
-| WebSocket 帧 / 发起调用栈 / 导出 curl | ✅ | ❌ | ❌ | ❌ | ❌ |
-| 请求 mock / 限速模拟 / 性能 trace | ❌ | ✅ | ✅ | ❌ | ❌ |
-| 凭据默认打码（Cookie/密码不进模型上下文） | ✅ | ❌⁶ | ❌⁶ | ✅⁷ | ❌ |
-| 无「服务端任意代码执行」默认开启 | ✅ | ❌⁸ | ✅ | ❌ | ❌ |
+| 网络原始头 + 请求/响应体 | ✅ | ✅ | ✅ | ❌ | ❌⁹ |
+| WebSocket 帧 / 发起调用栈 / 导出 curl | ✅ | ❌¹² | ❌ | ❌ | ❌⁹ |
+| 请求 mock / 限速模拟 / 性能 trace | ❌ | ❌¹² | ✅ | ❌ | ❌⁹ |
+| 凭据默认打码（Cookie/密码不进模型上下文） | ✅ | ❌⁶ | ❌⁶ | ✅⁷ | ❌⁹ |
+| 无「服务端任意代码执行」默认开启 | ✅ | ❌⁸ | ✅ | ❌¹⁰ | ❌¹⁰ |
 | 零运行时第三方依赖 | ✅ | ❌ | ❌ | ❌ | ❌ |
-| 模态浮层检出（含无 ARIA 角色的登录墙） | ✅ | ❌ | ❌ | ❌ | ❌ |
-| 元素像素坐标 + 跨源帧顶层坐标 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 模态浮层检出（含无 ARIA 角色的登录墙） | ✅ | ❌ | ❌ | ❌¹¹ | ❌¹¹ |
+| 元素像素坐标 + 跨源帧顶层坐标 | ✅ | ❌ | ❌ | ❌¹¹ | ❌¹¹ |
 
-<sup>1</sup> 仅 `--extension` 模式（Chrome/Edge，需装其扩展）；默认模式是独立 profile。 <sup>2</sup> 仅 `--autoConnect`（Chrome 144+，需在 `chrome://inspect` 手动开闸，该 profile 全部窗口暴露）。 <sup>3</sup> 二选一：目标 Chrome 带调试端口启动后直连，或关掉 Chrome 让它整份拷贝 profile。 <sup>4</sup> 独立 Chromium 分叉浏览器，首启一次性迁移 Chrome 数据。 <sup>5</sup> Windows 已支持插件模式（CLI/headless 模式规划中）；Linux 路径已写未验证。 <sup>6</sup> Playwright 的 `--secrets` 与 DevTools 的 `--redactNetworkHeaders` 均为可选开关且默认关闭，后者不覆盖 body。 <sup>7</sup> 输入侧占位符机制完备；网络返回值无打码。 <sup>8</sup> `browser_run_code_unsafe` 自述 RCE-equivalent，默认开启。
+<sup>1</sup> 仅 `--extension` 模式（Chrome/Edge，需装其扩展）；默认模式是独立 profile。 <sup>2</sup> 仅 `--autoConnect`（Chrome 144+，需在 `chrome://inspect` 手动开闸，该 profile 全部窗口暴露）。 <sup>3</sup> 二选一：CDP 直连已开调试端口的 Chrome，或用自带浏览器（独立 profile，不带用户登录态）。 <sup>4</sup> 独立 Chromium 分叉浏览器；登录态靠导入而非实时借用——`ego-browser import` 可从 Chrome/Edge/Brave 重复导入（扩展一并迁入）。 <sup>5</sup> Windows 已支持插件模式（CLI/headless 模式规划中）；Linux 路径已写未验证。 <sup>6</sup> Playwright 的 `--secrets` 与 DevTools 的 `--redactNetworkHeaders` 均为可选开关且默认关闭，后者不覆盖 body。实测 Playwright 的 `browser_network_request` 默认过滤请求头中的 Cookie 与 Set-Cookie（要完整原始头得走 run_code）。 <sup>7</sup> 输入侧占位符机制完备；网络返回值无打码。 <sup>8</sup> `browser_run_code_unsafe` 自述 RCE-equivalent，默认开启。 <sup>9</sup> ego 无网络类原生 helper，但 `page.cdp()` 逃生舱实测可达：原始头在 CDP ExtraInfo 事件里、需按 requestId 自行配对，WS 帧可抓，mock/限速/trace 均可做；全程 Cookie 明文无打码。 <sup>10</sup> ego 与 browser-use 的主接口都是代码（heredoc / Python），任意代码执行是设计使然。 <sup>11</sup> 实测无 ARIA 浮层不进 ego 的语义快照（与正文平铺同树、无模态标记，仅点击报错会点名遮挡元素），快照不含元素像素坐标，跨源帧顶层坐标需自行计算；browser-use 的元素表则会把遮罩下按钮整个过滤掉、坐标点击会误报成功，观察输出同样不含像素坐标。 <sup>12</sup> 实测 Playwright MCP 0.0.80 包内并无 mock/限速/trace 类工具（其 README 文档所载 `browser_route`/tracing 未随该版本发布），WS 帧、发起调用栈、curl 导出也无原生工具；均可用 `browser_run_code_unsafe` 逃生舱补做。
 
 **速度**（同一含跨源 iframe 的测试页、对等全新 profile、中位数；browser-use 因需人工在 `chrome://inspect` 逐次授权，无法无人值守完成同一流程，未列入）：
 
