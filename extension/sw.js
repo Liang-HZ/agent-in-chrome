@@ -9,7 +9,7 @@
 // 所有 browser_* 工具的实现都在这个文件里（工具表见 TOOLS）。
 
 const HOST_NAME = "org.liangai.agent_in_chrome";
-const VERSION = "0.55.0";
+const VERSION = "0.55.1";
 /* 这个 service worker 实例是什么时候起来的（= 磁盘上的代码是什么时候读进来的），见 hello */
 const SW_BOOTED_AT = Date.now();
 /* agent 开的标签页统一收进这一组，跟用户自己的标签页视觉隔离 */

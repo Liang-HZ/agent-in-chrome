@@ -50,7 +50,7 @@ import {
 import crypto from "node:crypto";
 
 const NAME = "agent-in-chrome";
-const VERSION = "0.55.0";
+const VERSION = "0.55.1";
 /** 本进程起来的时刻。CDP 模式下工具层就在本进程里，它也是「工具层代码的加载时刻」 */
 const PROCESS_STARTED_AT = Date.now();
 const SUPPORTED_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];

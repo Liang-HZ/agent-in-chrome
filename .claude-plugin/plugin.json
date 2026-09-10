@@ -1,6 +1,6 @@
 {
   "name": "agent-in-chrome",
-  "version": "0.55.0",
+  "version": "0.55.1",
   "description": "让 AI agent 操作你已经登录的那个 Chrome 标签页，复用现有登录态，无需另起一个空白浏览器。",
   "author": {
     "name": "Liang",

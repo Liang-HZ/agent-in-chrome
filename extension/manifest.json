@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent in Chrome",
-  "version": "0.55.0",
+  "version": "0.55.1",
   "description": "让 AI agent 操作你已经登录的那个 Chrome 标签页，复用你现有的登录态。 · by Liang (liangai.org)",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6Jtdbvmd/bUVxIn9YXdLBw9idVVJwXfCHCGYkPZ0Wp8YcIRBPj10a6L4tTF6h78cLjvgowiZmCAdiUZekjBdPrKJT9nhkGIX9yER3DfRpk0NOkTxum95Eb/K6Y4U/3q1TbhFkebBFZAcPG6O5/Nh8qnTiEuN/EFB3PqlODh4UInLxYbGsHV5vp4WXxfGOt1fF3VkekS7T1gPndijbBBeriv61eb7KguMNrEbid+p07kBPDZ6D3mp4JT6eqsfoPgK01QISBMrJgou0ra9Z4t+bhPvsoe2xAkr8X5iojSAVKUs1UKyKueV2WJ1JPqdAFIRckWwZ4sqEpk/LenKFljTiQIDAQAB",
   "minimum_chrome_version": "125",
