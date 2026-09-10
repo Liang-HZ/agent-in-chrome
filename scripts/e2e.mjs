@@ -2718,7 +2718,10 @@ if (process.platform === "win32") {
   const QOD = path.join(K_HOME, ".qoder", "settings.json");
   const QODCN = path.join(K_HOME, ".qoder-cn", "settings.json");
   const QIDECN = path.join(K_HOME, ".qoder-cn", "mcp.json");
-  const QHOME_CN = path.join(K_HOME, "Library", "Application Support", "QoderCN", "SharedClientCache", "mcp.json");
+  const QHOME_CN =
+    process.platform === "darwin"
+      ? path.join(K_HOME, "Library", "Application Support", "QoderCN", "SharedClientCache", "mcp.json")
+      : path.join(K_HOME, ".config", "QoderCN", "SharedClientCache", "mcp.json");
   const TRAECN =
     process.platform === "darwin"
       ? path.join(K_HOME, "Library", "Application Support", "Trae CN", "User", "mcp.json")
