@@ -154,35 +154,79 @@ export function saveSync(value, file = CONFIG_FILE) {
  *
  * 防抖：一次保存常常连着来好几个事件（rename 前后、元数据），不合并的话
  * 一次改动会发好几条 listChanged，客户端跟着重拉好几次工具表。
+ *
+ * 另外还带一段**有界引导轮询**：`fs.watch` 在 macOS 上要过一小会儿才真的开始监听，
+ * 这段窗口里的写入原生事件一条都不会有，靠比对文件指纹补上。收到第一个原生事件
+ * （证明流活了）或超过上限就自动停，之后一律走原生事件。
  */
-export function watch(onChange, { file = CONFIG_FILE, debounceMs = 80 } = {}) {
+const BOOTSTRAP_POLL_MS = 200;
+const BOOTSTRAP_MAX_MS = 10_000;
+
+export function watch(onChange, { file = CONFIG_FILE, debounceMs = 80, _watchImpl = fs.watch } = {}) {
   const dir = path.dirname(file);
   const base = path.basename(file);
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {}
 
+  const fingerprint = () => {
+    try {
+      const s = fs.statSync(file);
+      return `${s.ino}:${s.size}:${s.mtimeMs}`;
+    } catch {
+      return "absent";
+    }
+  };
+
   let timer = null;
   let stopped = false;
+  let poll = null;
+  let fp = fingerprint();
   let w;
+
+  const schedule = () => {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      if (!stopped) onChange(loadSync(file));
+    }, debounceMs);
+  };
+  const stopPoll = () => {
+    if (poll) clearInterval(poll);
+    poll = null;
+  };
+
   try {
-    w = fs.watch(dir, { persistent: false }, (_type, name) => {
+    w = _watchImpl(dir, { persistent: false }, (_type, name) => {
+      stopPoll();
       if (name && name !== base) return;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        if (!stopped) onChange(loadSync(file));
-      }, debounceMs);
+      fp = fingerprint();
+      schedule();
     });
   } catch (e) {
     return { ok: false, error: e, stop() {} };
   }
   w.unref?.();
+
+  const bootedAt = Date.now();
+  poll = setInterval(() => {
+    if (stopped) return stopPoll();
+    const now = fingerprint();
+    if (now !== fp) {
+      fp = now;
+      schedule();
+    }
+    if (Date.now() - bootedAt >= BOOTSTRAP_MAX_MS) stopPoll();
+  }, BOOTSTRAP_POLL_MS);
+  poll.unref?.();
+
   return {
     ok: true,
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      stopPoll();
       try {
         w.close();
       } catch {}

@@ -24,6 +24,16 @@ const check = (name, cond, extra = "") => {
   }
 };
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const waitUntil = async (cond, timeout = 3000, step = 20) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true;
+    await sleep(step);
+  }
+  return cond();
+};
+
 console.log("\n\x1b[1m配置校验\x1b[0m");
 {
   const d = cfg.normalize({});
@@ -104,26 +114,106 @@ console.log("\n\x1b[1m热更新（watch）\x1b[0m");
   check("watch 起得来", w.ok);
 
   cfg.saveSync({ tools: { profile: "observe" } }, file);
-  await new Promise((r) => setTimeout(r, 250));
+  await waitUntil(() => seen.at(-1)?.value?.tools.profile === "observe");
   check("文件从无到有能被监听到", seen.length >= 1 && seen.at(-1)?.value?.tools.profile === "observe");
 
   cfg.saveSync({ tools: { profile: "observe", disable: ["browser_find"] } }, file);
-  await new Promise((r) => setTimeout(r, 250));
+  await waitUntil(() => seen.at(-1)?.value?.tools.disable?.includes("browser_find"));
   check("原子写（rename 换 inode）也能被监听到", seen.at(-1)?.value?.tools.disable?.includes("browser_find"));
 
   const n = seen.length;
   fs.writeFileSync(file, "{ 坏掉的");
-  await new Promise((r) => setTimeout(r, 250));
+  await waitUntil(() => seen.length > n);
   check("坏配置也会回调（调用方据此失败关闭）", seen.length > n);
   check("坏配置的 value 是 null，不是默认值", seen.at(-1)?.value === null);
 
   w.stop();
   const after = seen.length;
   cfg.saveSync({ tools: { profile: "full" } }, file);
-  await new Promise((r) => setTimeout(r, 250));
+  await sleep(250);
   check("stop() 之后不再回调", seen.length === after);
 
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log("\n\x1b[1m引导轮询（fs.watch 建流窗口）\x1b[0m");
+{
+  const deadWatch = () => ({ close() {}, unref() {} });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aic-boot-"));
+  const file = path.join(dir, "config.json");
+  const seen = [];
+  const w = cfg.watch((loaded) => seen.push(loaded), { file, debounceMs: 30, _watchImpl: deadWatch });
+  check("注入假 watcher 时 watch 仍报 ok", w.ok);
+
+  cfg.saveSync({ tools: { profile: "observe" } }, file);
+  await waitUntil(() => seen.at(-1)?.value?.tools.profile === "observe");
+  check("原生事件一条都不来时，文件从无到有仍被引导轮询捞到", seen.at(-1)?.value?.tools.profile === "observe");
+
+  cfg.saveSync({ tools: { profile: "observe", disable: ["browser_batch"] } }, file);
+  await waitUntil(() => seen.at(-1)?.value?.tools.disable?.includes("browser_batch"));
+  check(
+    "原生事件一条都不来时，原子写换 inode 也被引导轮询捞到",
+    seen.at(-1)?.value?.tools.disable?.includes("browser_batch")
+  );
+
+  w.stop();
+  const after = seen.length;
+  cfg.saveSync({ tools: { profile: "full" } }, file);
+  await sleep(600);
+  check("stop() 之后引导轮询也停", seen.length === after);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+{
+  let fire = null;
+  const manualWatch = (_dir, _opts, cb) => {
+    fire = cb;
+    return {
+      close() {
+        fire = null;
+      },
+      unref() {},
+    };
+  };
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aic-boot2-"));
+  const file = path.join(dir, "config.json");
+  const seen = [];
+  const w = cfg.watch((loaded) => seen.push(loaded), { file, debounceMs: 30, _watchImpl: manualWatch });
+
+  cfg.saveSync({ tools: { profile: "observe" } }, file);
+  fire("rename", "config.json");
+  await waitUntil(() => seen.length >= 1);
+  check("手动触发的原生事件能回调", seen.length >= 1 && seen.at(-1)?.value?.tools.profile === "observe");
+
+  const after = seen.length;
+  cfg.saveSync({ tools: { profile: "full" } }, file);
+  await sleep(600);
+  check("收到第一个原生事件后轮询即停（600ms 内不再有回调）", seen.length === after);
+
+  w.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+{
+  let lost = 0;
+  const N = 40;
+  for (let i = 0; i < N; i++) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aic-race-"));
+    const file = path.join(dir, "config.json");
+    let got = false;
+    const w = cfg.watch(() => {
+      got = true;
+    }, { file, debounceMs: 30 });
+    cfg.saveSync({ tools: { profile: "observe" } }, file);
+    await waitUntil(() => got, 1000);
+    if (!got) lost++;
+    w.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  check(`watch() 后立刻写 ${N} 次，一次都不丢`, lost === 0, `丢了 ${lost} 次`);
 }
 
 function startServer(dir) {
