@@ -838,8 +838,12 @@ export function readDshSession(local, { env = process.env, home = osMod.homedir(
 }
 
 /* 会话 id 进路径与提取流程前的锚（安全边界，勿放宽）：只放行 UUID 形状，`..`、`/`、
- * 引号一概进不来——id 来自 MCP 调用方给的 _meta，是外部输入 */
-const AG_CONV_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+ * 引号一概进不来——id 来自 MCP 调用方给的 _meta，是外部输入。
+ *
+ * Antigravity 的 conversation_id 和 Codex 的 thread_id 是同一个形状，**共用这一个
+ * RegExp 对象**：两家的 id 都会被拼进文件路径、也都会被 server.mjs 的 sidFor 拼进
+ * 扩展侧那张全局 sessions Map 的键。各写一份正则就是「将来只改一边，一边收一边不收」。 */
+const CONV_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function antigravityDataDir(clientCommand, { home = osMod.homedir() } = {}) {
   const m = /--app_data_dir[ =]([\w.-]+)/.exec(String(clientCommand || ""));
@@ -853,7 +857,7 @@ const AG_DB_MAX = 256 << 20;
 
 export function antigravityConversationId(meta) {
   const id = meta && typeof meta === "object" ? String(meta["antigravity.google/conversation_id"] || "").trim() : "";
-  return AG_CONV_RE.test(id) ? id : null;
+  return CONV_UUID_RE.test(id) ? id : null;
 }
 
 function readVarint(buf, i) {
@@ -1012,6 +1016,65 @@ export function readAntigravitySessionTitle(meta, local, { fs = fsMod, home = os
   });
 }
 
+const CODEX_INDEX_MAX = 16 << 20;
+const CODEX_INDEX_TAIL = 4 << 20;
+
+export function codexHome({ env = process.env, home = osMod.homedir() } = {}) {
+  const d = typeof env?.CODEX_HOME === "string" ? env.CODEX_HOME.trim() : "";
+  return d || path.join(home, ".codex");
+}
+
+export function codexThreadId(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  const turn = meta["x-codex-turn-metadata"];
+  const nested = turn && typeof turn === "object" ? String(turn.thread_id ?? "").trim() : "";
+  const id = nested || String(meta.threadId ?? "").trim();
+  return CONV_UUID_RE.test(id) ? id : null;
+}
+
+export function readCodexSessionTitle(meta, { env = process.env, home = osMod.homedir(), fs = fsMod } = {}) {
+  const id = codexThreadId(meta);
+  if (!id) return null;
+  const file = path.join(codexHome({ env, home }), "session_index.jsonl");
+  return memoTitle(`codex:${file}:${id}`, () => {
+    let size = 0;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      return null;
+    }
+    let text;
+    if (size > CODEX_INDEX_MAX && fs.openSync && fs.readSync) {
+      const fd = fs.openSync(file, "r");
+      try {
+        const buf = Buffer.alloc(CODEX_INDEX_TAIL);
+        const n = fs.readSync(fd, buf, 0, CODEX_INDEX_TAIL, size - CODEX_INDEX_TAIL);
+        text = buf.toString("utf8", 0, n);
+      } finally {
+        try {
+          fs.closeSync(fd);
+        } catch {}
+      }
+    } else {
+      text = fs.readFileSync(file, "utf8");
+    }
+    const needle = `"id":"${id}"`;
+    const lines = String(text).split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes(needle)) continue;
+      let d = null;
+      try {
+        d = JSON.parse(lines[i]);
+      } catch {
+        continue;
+      }
+      if (!d || d.id !== id) continue;
+      return clip(d.thread_name, 60);
+    }
+    return null;
+  });
+}
+
 /*
  * 现在这一刻的会话标题。
  *
@@ -1030,6 +1093,8 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
   if (tr) return tr;
   const ag = readAntigravitySessionTitle(meta, local, { fs, home, exec });
   if (ag) return ag;
+  const cx = readCodexSessionTitle(meta, { env, home, fs });
+  if (cx) return cx;
   const ds = dsh !== undefined ? dsh : readDshSession(local, { env, home, fs });
   if (ds?.title) return ds.title;
   const t = readHostSessionTitle(local.hostSessionId, { fs, home, env });

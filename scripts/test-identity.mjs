@@ -19,6 +19,9 @@ import {
   antigravityConversationId,
   readAntigravityWorkspace,
   readAntigravitySessionTitle,
+  codexHome,
+  codexThreadId,
+  readCodexSessionTitle,
   readSessionIdentity,
   hasTty,
   walkSurface,
@@ -1173,6 +1176,203 @@ console.log("\n\x1b[1mAntigravity：数据目录自报 + 会话库里的工作�
     }
 
     check("跑完 tmp 下没有 ag-title-* 残留（拷贝件用完即删）", agTmpLeft().length === tmpBefore, agTmpLeft().join(","));
+  }
+}
+
+console.log("\n\x1b[1mCodex：_meta 的 thread_id 精确归属 + session_index.jsonl 里的线程名\x1b[0m");
+{
+  const ID = "01a0935a-5d74-7680-8d59-be86c5e590c3";
+  const metaFor = (id = ID) => ({
+    "x-codex-turn-metadata": { session_id: id, thread_id: id, workspace_kind: "project", turn_id: "01a09376-ce13-7862-8a7e-eeef069cd3cf", model: "gpt-6-astra" },
+    threadId: id,
+    itemId: "ctc_0ac0",
+    progressToken: 1,
+  });
+  const row = (id, name, at = "2026-09-12T02:02:56.925418Z") =>
+    JSON.stringify({ id, thread_name: name, updated_at: at }) + "\n";
+  const cxHome = (lines) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "aic-cx-"));
+    fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+    if (lines !== null) fs.writeFileSync(path.join(home, ".codex", "session_index.jsonl"), lines);
+    return home;
+  };
+  const at = (meta, home, env = {}) => {
+    resetTitleMemo();
+    return readCodexSessionTitle(meta, { home, env });
+  };
+
+  check("thread_id 在 x-codex-turn-metadata 里", codexThreadId(metaFor()) === ID);
+  check("没有那段时兜底顶层 threadId", codexThreadId({ threadId: ID, progressToken: 1 }) === ID);
+  check("前后空白去掉再判（sid 那一路和这一路必须给同一个答案）", codexThreadId({ threadId: ` ${ID} ` }) === ID);
+  check("不是它家的帧（没有这两个键）：null", codexThreadId({ session_id: "sess_x", progressToken: 1 }) === null);
+  check("_meta 缺席不抛", codexThreadId(null) === null && codexThreadId(undefined) === null && codexThreadId("x") === null);
+  check("形状不对的 id 一律不认", codexThreadId({ threadId: "01a0935a" }) === null && codexThreadId({ threadId: "../../etc/passwd" }) === null);
+
+  check("默认是 ~/.codex", codexHome({ env: {}, home: "/h" }) === path.join("/h", ".codex"));
+  check("CODEX_HOME 覆盖（写死路径会读到另一个安装的索引）", codexHome({ env: { CODEX_HOME: "/tmp/cx" }, home: "/h" }) === "/tmp/cx");
+  check("CODEX_HOME 是空白串时当没设", codexHome({ env: { CODEX_HOME: "   " }, home: "/h" }) === path.join("/h", ".codex"));
+
+  {
+    const home = cxHome(row("00000000-0000-4000-8000-000000000001", "别的线程") + row(ID, "检查 Todo 清单链路"));
+    check("正常命中：拿到这一段线程的名字", at(metaFor(), home) === "检查 Todo 清单链路");
+    check("顶层 threadId 兜底形式也命中", at({ threadId: ID }, home) === "检查 Todo 清单链路");
+    check("索引里没有的线程：null", at(metaFor("00000000-0000-4000-8000-0000000000ff"), home) === null);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = cxHome(row(ID, "旧名字") + row("00000000-0000-4000-8000-000000000001", "别的线程") + row(ID, "改过之后的名字"));
+    check("同 id 多行取最后一行（从头找会读到被改掉的旧名）", at(metaFor(), home) === "改过之后的名字");
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = cxHome(row(ID, "默认目录里的名字"));
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "aic-cx2-"));
+    fs.writeFileSync(path.join(other, "session_index.jsonl"), row(ID, "CODEX_HOME 指过去的名字"));
+    check("CODEX_HOME 指到哪就读哪", at(metaFor(), home, { CODEX_HOME: other }) === "CODEX_HOME 指过去的名字");
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
+  }
+
+  {
+    const bad = cxHome('{"id":"' + ID + '"\n' + row(ID, "") + row(ID, "   "));
+    check("坏 JSON 行 + thread_name 是空串/全空白 → null，不抛", at(metaFor(), bad) === null);
+    const missing = cxHome(JSON.stringify({ id: ID, updated_at: "2026-09-12T02:02:56Z" }) + "\n");
+    check("最后一行缺 thread_name → null（不许往前翻去捡旧名）", at(metaFor(), missing) === null);
+    const stale = cxHome(row(ID, "上一次的名字") + JSON.stringify({ id: ID }) + "\n");
+    check("最后一行没名字时前面那行也不算数", at(metaFor(), stale) === null);
+    const wrongType = cxHome(JSON.stringify({ id: ID, thread_name: { t: "x" } }) + "\n");
+    check("thread_name 不是字符串 → null", at(metaFor(), wrongType) === null);
+    const nofile = cxHome(null);
+    check("索引文件还没建 → null，不抛", at(metaFor(), nofile) === null);
+    for (const h of [bad, missing, stale, wrongType, nofile]) fs.rmSync(h, { recursive: true, force: true });
+  }
+
+  {
+    const home = cxHome(row(ID, "真名") + row("00000000-0000-4000-8000-000000000002", `别人提到了 "id":"${ID}"`));
+    check("字面命中但 id 对不上的行跳过，继续往前找", at(metaFor(), home) === "真名");
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    let touched = 0;
+    const noFs = new Proxy(
+      {},
+      {
+        get: () => () => {
+          touched++;
+          throw new Error("不该碰盘");
+        },
+      }
+    );
+    const run = (meta) => {
+      resetTitleMemo();
+      return readCodexSessionTitle(meta, { fs: noFs, home: "/h", env: {} });
+    };
+    check("畸形 id：null，且一次文件读取都不发生", run({ threadId: "../../etc/passwd" }) === null && touched === 0, `touched=${touched}`);
+    check("id 带引号（路径注入形状）也在读盘前停住", run({ threadId: `${ID}"` }) === null && touched === 0, `touched=${touched}`);
+    check("不是它家的帧：null，不读盘", run({ session_id: "sess_x" }) === null && touched === 0, `touched=${touched}`);
+    check("_meta 缺席不抛、不读盘", run(null) === null && touched === 0, `touched=${touched}`);
+  }
+
+  {
+    const tail = row("00000000-0000-4000-8000-000000000003", "尾部的别人") + row(ID, "超大索引里最近的那行");
+    const buf = Buffer.from(tail, "utf8");
+    const SIZE = (64 << 20) + buf.length;
+    let wholeReads = 0;
+    let lastPos = null;
+    const bigFs = {
+      statSync: () => ({ size: SIZE }),
+      openSync: () => 7,
+      closeSync: () => {},
+      readSync: (fd, out, off, len, pos) => {
+        lastPos = pos;
+        const start = SIZE - buf.length;
+        out.fill(0x20, 0, len);
+        let n = 0;
+        for (let i = 0; i < len; i++) {
+          const abs = pos + i;
+          if (abs >= SIZE) break;
+          out[i] = abs >= start ? buf[abs - start] : 0x0a;
+          n++;
+        }
+        return n;
+      },
+      readFileSync: () => {
+        wholeReads++;
+        throw new Error("不该整份读进内存");
+      },
+    };
+    resetTitleMemo();
+    const t = readCodexSessionTitle(metaFor(), { fs: bigFs, home: "/h", env: {} });
+    check("超上限时只读尾部，仍能命中最近的那行", t === "超大索引里最近的那行" && wholeReads === 0, `${t} / whole=${wholeReads}`);
+    check("读的位置就是文件末尾那 4MB", lastPos === SIZE - (4 << 20), String(lastPos));
+  }
+
+  {
+    const home = cxHome(row(ID, "记住我"));
+    resetTitleMemo();
+    let reads = 0;
+    const counting = {
+      statSync: (...a) => fs.statSync(...a),
+      readFileSync: (...a) => {
+        reads++;
+        return fs.readFileSync(...a);
+      },
+      openSync: fs.openSync,
+      readSync: fs.readSync,
+      closeSync: fs.closeSync,
+    };
+    const first = readCodexSessionTitle(metaFor(), { home, env: {}, fs: counting });
+    readCodexSessionTitle(metaFor(), { home, env: {}, fs: counting });
+    readCodexSessionTitle(metaFor(), { home, env: {}, fs: counting });
+    check("查到过就不再读第二次盘", first === "记住我" && reads === 1, `${first} / 读了 ${reads} 次`);
+    fs.rmSync(path.join(home, ".codex", "session_index.jsonl"));
+    check("查到过就记住，索引没了也不改口", readCodexSessionTitle(metaFor(), { home, env: {} }) === "记住我");
+
+    resetTitleMemo();
+    reads = 0;
+    check("索引还没落盘：null", readCodexSessionTitle(metaFor(), { home, env: {}, fs: counting }) === null);
+    check("退避窗内不重读（否则每帧都要扫一遍索引）", readCodexSessionTitle(metaFor(), { home, env: {}, fs: counting }) === null && reads === 0, `读了 ${reads} 次`);
+    fs.writeFileSync(path.join(home, ".codex", "session_index.jsonl"), row(ID, "8 秒后才落盘的名字"));
+    resetTitleMemo();
+    check("落盘之后补得上", readCodexSessionTitle(metaFor(), { home, env: {} }) === "8 秒后才落盘的名字");
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const long = "标".repeat(80);
+    const home = cxHome(row(ID, long));
+    const t = at(metaFor(), home);
+    check("线程名截到 60 个字符", t === long.slice(0, 60) && t.length === 60, String(t?.length));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = cxHome(row(ID, "协议级认到的 Codex 线程名"));
+    fs.mkdirSync(path.join(home, ".claude", "sessions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, ".claude", "sessions", "7101.json"),
+      JSON.stringify({ pid: 7101, sessionId: "s", name: "本机取证认到的名字", nameSource: "generated" })
+    );
+    const local = { clientPid: 7101, hostSessionId: null, sessionName: null, clientCommand: null, userDataDir: null, brandAppDir: null };
+    resetTitleMemo();
+    check(
+      "readSessionTitle 走到 Codex 这一支（协议级优先于会话记录文件）",
+      readSessionTitle(local, { home, env: {}, meta: metaFor() }) === "协议级认到的 Codex 线程名"
+    );
+    resetTitleMemo();
+    check(
+      "同一个 local 没有 Codex meta 时行为一字不变",
+      readSessionTitle(local, { home, env: {} }) === "本机取证认到的名字"
+    );
+    resetTitleMemo();
+    check(
+      "readSessionIdentity 也拿得到（工作区没有会话级证据时不盖进程级那份）",
+      readSessionIdentity(local, { home, env: {}, meta: metaFor(), tmp: path.join(home, "unused-tmp") }).title === "协议级认到的 Codex 线程名"
+    );
+    fs.rmSync(home, { recursive: true, force: true });
   }
 }
 
