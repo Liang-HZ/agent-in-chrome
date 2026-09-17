@@ -22,6 +22,9 @@ import {
   codexHome,
   codexThreadId,
   readCodexSessionTitle,
+  opencodeDataDir,
+  isOpencodeClient,
+  opencodeSessionOf,
   readSessionIdentity,
   hasTty,
   walkSurface,
@@ -30,6 +33,7 @@ import {
   readClientSessionFile,
   readHostSessionTitle,
   readWorkbuddySessionTitle,
+  workbuddyConversationId,
   informativeName,
   composeAgent,
   probeLocal,
@@ -97,6 +101,23 @@ const CHAINS = {
     [970, { ppid: 971, tty: "??", command: "/Users/u/.nvm/versions/node/v24.11.1/bin/node /Users/u/.agent-in-chrome/agent-in-chrome/server.mjs" }],
     [971, { ppid: 1, tty: "??", command: "/Applications/WorkBuddy.app/Contents/MacOS/Electron /Applications/WorkBuddy.app/Contents/Resources/app.asar/main/daemon-app-server-entry.js --stdio" }],
   ]),
+  cliFromGui: new Map([
+    [990, { ppid: 991, tty: "??", command: "/opt/homebrew/Cellar/node/24.11.1/bin/node /Users/u/.agent-in-chrome/agent-in-chrome/server.mjs" }],
+    [991, { ppid: 992, tty: "??", command: "/opt/homebrew/bin/opencode run --auto 用 browser_status 查一次浏览器状态" }],
+    [992, { ppid: 993, tty: "??", command: "/bin/zsh -c . '/Users/u/.workbuddy-ai/shell-snapshots/snapshot-zsh-1789611597980-n9i4qa.sh' && opencode run" }],
+    [993, { ppid: 994, tty: "??", command: "/Applications/WorkBuddy AI.app/Contents/MacOS/Electron /Applications/WorkBuddy AI.app/Contents/Resources/app.asar/out/main/index.js" }],
+    [994, { ppid: 1, tty: "??", command: "/Applications/WorkBuddy AI.app/Contents/MacOS/Electron" }],
+  ]),
+  qoderDeep: new Map([
+    [995, { ppid: 996, tty: "??", command: "/opt/homebrew/Cellar/node/24.11.1/bin/node /Users/u/.agent-in-chrome/agent-in-chrome/server.mjs" }],
+    [996, { ppid: 997, tty: "??", command: "/Applications/Qoder CN.app/Contents/Resources/app/resources/bin/aarch64_darwin/QoderCN start --workDir /Users/u/Library" }],
+    [997, { ppid: 1, tty: "??", command: "/Applications/Qoder CN.app/Contents/MacOS/Electron" }],
+  ]),
+  cliMentionsApp: new Map([
+    [985, { ppid: 986, tty: "??", command: "/opt/homebrew/Cellar/node/24.11.1/bin/node /Users/u/.agent-in-chrome/agent-in-chrome/server.mjs" }],
+    [986, { ppid: 987, tty: "??", command: "/usr/local/bin/some-cli --config /Applications/Claude.app/Contents/Resources/app.asar/config.json" }],
+    [987, { ppid: 1, tty: "??", command: "/Applications/Claude.app/Contents/MacOS/Claude" }],
+  ]),
 };
 
 const SELF = "/Users/u/.agent-in-chrome/agent-in-chrome/server.mjs";
@@ -139,6 +160,27 @@ console.log("\n\x1b[1m形态与品牌：认父进程链上的证据\x1b[0m");
 
   const w = walk("workbuddy", 970);
   check("WorkBuddy：Electron 主进程直接 spawn，认包名", w.surface === "app" && w.brand === "WorkBuddy", JSON.stringify(w));
+
+  const g = walk("cliFromGui", 990);
+  check(
+    "从 GUI 里起的 CLI：不认祖先的 .app，报无证据（宁可不显示也不显示错）",
+    g.surface === null && g.brand === null,
+    JSON.stringify(g)
+  );
+
+  const m = walk("cliMentionsApp", 985);
+  check(
+    "参数里提到别的 .app 不算数：照旧报无证据",
+    m.surface === null && m.brand === null,
+    JSON.stringify(m)
+  );
+
+  const qd = walk("qoderDeep", 995);
+  check(
+    "客户端在包里但不在 Contents/MacOS 下：仍然认这个包",
+    qd.surface === "app" && qd.brand === "Qoder CN" && qd.appDir === "/Applications/Qoder CN.app",
+    JSON.stringify(qd)
+  );
 
   const none = walkSurface(950, new Map(), {});
   check("查不到进程就报没有形态，不猜", none.surface === null && none.brand === null, JSON.stringify(none));
@@ -205,13 +247,13 @@ console.log("\n\x1b[1m会话标题：客户端写在磁盘上的那份\x1b[0m");
 
   check("读得到客户端的会话记录", readClientSessionFile(7001, { home })?.entrypoint === "cli");
   check("pid 对不上的残留文件当没有", readClientSessionFile(7002, { home }) === null);
-  check("凑出来的会话名（derived）不当标题——它跟工作区那段重复", readSessionTitle({ clientPid: 7001, hostSessionId: null }, { home }) === null);
+  check("凑出来的会话名（derived）不当标题——它跟工作区那段重复", readSessionTitle({ clientPid: 7001, hostSessionId: null }, { home, env: {} }) === null);
 
   fs.writeFileSync(
     path.join(sessions, "7003.json"),
     JSON.stringify({ pid: 7003, cwd: "/tmp/z", entrypoint: "cli", name: "查竞品定价", nameSource: "auto" })
   );
-  check("不是凑出来的会话名就当标题", readSessionTitle({ clientPid: 7003, hostSessionId: null }, { home }) === "查竞品定价");
+  check("不是凑出来的会话名就当标题", readSessionTitle({ clientPid: 7003, hostSessionId: null }, { home, env: {} }) === "查竞品定价");
 
   const hostDir = path.join(home, "Library", "Application Support", "Claude", "claude-code-sessions", "org1", "user1");
   fs.mkdirSync(hostDir, { recursive: true });
@@ -219,25 +261,29 @@ console.log("\n\x1b[1m会话标题：客户端写在磁盘上的那份\x1b[0m");
   check("宿主管的标题读得到（逐级列目录找到那两层）", readHostSessionTitle("local_abc-123", { home }) === "修 sid 漂移与组认领");
   check("没有这个会话 id 就是没有", readHostSessionTitle("local_nope", { home }) === null);
   check("会话 id 里有路径分隔符一律不认（别人给的字符串，不许拼进路径）", readHostSessionTitle("../../etc/passwd", { home }) === null);
-  check("宿主的标题优先于客户端记的会话名", readSessionTitle({ clientPid: 7003, hostSessionId: "local_abc-123" }, { home }) === "修 sid 漂移与组认领");
+  check("宿主的标题优先于客户端记的会话名", readSessionTitle({ clientPid: 7003, hostSessionId: "local_abc-123" }, { home, env: {} }) === "修 sid 漂移与组认领");
 
   const late = path.join(hostDir, "local_late.json");
-  check("标题还没生成时就是没有", readSessionTitle({ clientPid: 0, hostSessionId: "local_late" }, { home }) === null);
+  check("标题还没生成时就是没有", readSessionTitle({ clientPid: 0, hostSessionId: "local_late" }, { home, env: {} }) === null);
   fs.writeFileSync(late, JSON.stringify({ title: "后来才有的标题" }));
-  check("标题后来出现了要能读到（所以不能只在握手时读一次）", readSessionTitle({ clientPid: 0, hostSessionId: "local_late" }, { home }) === "后来才有的标题");
+  check("标题后来出现了要能读到（所以不能只在握手时读一次）", readSessionTitle({ clientPid: 0, hostSessionId: "local_late" }, { home, env: {} }) === "后来才有的标题");
 
   fs.rmSync(home, { recursive: true, force: true });
 }
 
-console.log("\n\x1b[1mWorkBuddy 的会话标题：活着的对话恰好一个才归属\x1b[0m");
+console.log("\n\x1b[1mWorkBuddy 的会话标题：协议级 → 引擎进程 → 活会话计数\x1b[0m");
 {
   const wb = fs.mkdtempSync(path.join(os.tmpdir(), "aic-wb-"));
   fs.mkdirSync(path.join(wb, "sessions"));
   const put = (pid, extra) => fs.writeFileSync(path.join(wb, "sessions", `${pid}.json`), JSON.stringify({ pid, ...extra }));
-  put(7100, { kind: "interactive", sessionId: "649aa100-f37d-4bff-b8db-7518eef9a95d" });
+  const A = "649aa100-f37d-4bff-b8db-7518eef9a95d";
+  const B = "0f179b98-cf6a-4c42-a9e5-02766f6d131f";
+  put(7100, { kind: "interactive", sessionId: A });
   put(7101, { kind: "interactive", sessionId: "interactive-7101" });
-  put(7102, { kind: "prewarm", sessionId: "0f179b98-cf6a-4c42-a9e5-02766f6d131f" });
-  put(7103, { kind: "interactive", sessionId: "0f179b98-cf6a-4c42-a9e5-02766f6d131f" });
+  put(7102, { kind: "prewarm", sessionId: B });
+  put(7103, { kind: "interactive", sessionId: B });
+  put(7200, { pid: 9999, kind: "interactive", sessionId: B });
+  put(7300, { kind: "interactive", sessionId: A });
 
   const env = { WORKBUDDY_CONFIG_DIR: wb };
   let asked = null;
@@ -245,27 +291,90 @@ console.log("\n\x1b[1mWorkBuddy 的会话标题：活着的对话恰好一个才
     asked = { bin, sql: args[args.length - 1] };
     return "查竞品定价\n";
   };
+  const oneLive = (p) => p === 7100;
 
-  const one = readWorkbuddySessionTitle({ env, exec: fakeExec, alive: (p) => p === 7100 });
-  check("恰好一个活着的对话：读它的标题", one === "查竞品定价", JSON.stringify(one));
-  check("查库带的是那段对话的 uuid（先验过形状才拼 SQL）", /649aa100-f37d-4bff-b8db-7518eef9a95d/.test(asked?.sql || ""), asked?.sql);
-  check("CLI host / prewarm 的假会话不算对话", one === "查竞品定价");
-  check("两段对话都活着：分不出是谁，不猜", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true }) === null);
-  check("对话都结束了就是没有", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false }) === null);
+  const one = readWorkbuddySessionTitle({ env, exec: fakeExec, alive: oneLive });
+  check("兜底：恰好一个活着的对话时读它的标题", one === "查竞品定价", JSON.stringify(one));
+  check("兜底：查库带的是那段对话的 uuid（先验过形状才拼 SQL）", /649aa100-f37d-4bff-b8db-7518eef9a95d/.test(asked?.sql || ""), asked?.sql);
+  check("兜底：CLI host / prewarm 的假会话不算对话", one === "查竞品定价");
+  check(
+    "兜底：两段对话都活着又没有别的证据时仍然不猜",
+    readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true }) === null
+  );
+  check("兜底：对话都结束了就是没有", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false }) === null);
   check("没有 WORKBUDDY_CONFIG_DIR（别家客户端）一律 null", readWorkbuddySessionTitle({ env: {}, exec: fakeExec }) === null);
-  check("库读不动就不显示，不许编", readWorkbuddySessionTitle({ env, exec: () => { throw new Error("no db"); }, alive: (p) => p === 7100 }) === null);
+  check(
+    "库读不动就不显示，不许编",
+    readWorkbuddySessionTitle({ env, exec: () => { throw new Error("no db"); }, alive: oneLive }) === null
+  );
+
+  asked = null;
+  const byMeta = readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true, meta: { "workbuddy.ai/conversationId": B } });
+  check("协议级：_meta 报的会话 id 优先于活会话计数（多开对话照样归属）", byMeta === "查竞品定价", JSON.stringify(byMeta));
+  check("协议级：查的是 _meta 报的那个 uuid，不是「活着的那个」", /0f179b98-cf6a-4c42-a9e5-02766f6d131f/.test(asked?.sql || ""), asked?.sql);
+
+  asked = null;
+  const byBaggage = readWorkbuddySessionTitle({
+    env,
+    exec: fakeExec,
+    alive: () => true,
+    meta: { progressToken: 7, baggage: "codebuddy.session_id=" + A + ",other=1" },
+  });
+  check("协议级：baggage 里的 codebuddy.session_id 是同一份值的第二处写法", byBaggage === "查竞品定价" && /649aa100/.test(asked?.sql || ""), asked?.sql);
+
+  asked = null;
+  readWorkbuddySessionTitle({
+    env,
+    exec: fakeExec,
+    alive: () => true,
+    meta: { "workbuddy.ai/conversationId": B, baggage: "codebuddy.session_id=" + A },
+  });
+  check("协议级：命名空间键优先于 baggage（两处都带时以前者为准）", /0f179b98/.test(asked?.sql || ""), asked?.sql);
+
+  check("协议级：形状锚只放行 uuid（不是 uuid 就当没报）", workbuddyConversationId({ "workbuddy.ai/conversationId": "abc" }) === null);
+  check("协议级：meta 不是对象时不炸", workbuddyConversationId(null) === null && workbuddyConversationId("x") === null);
+
+  asked = null;
+  const byPid = readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true, enginePid: 7100 });
+  check("进程级：引擎 pid 的记录直接给出会话 id（真机上就是它）", byPid === "查竞品定价" && /649aa100/.test(asked?.sql || ""), asked?.sql);
+  check("进程级：引擎 pid 的文件里 pid 对不上（pid 被复用）就不认", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false, enginePid: 7200 }) === null);
+  check("进程级：指向预热池那种非 interactive 的记录不认", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false, enginePid: 7102 }) === null);
+  check("进程级：指着一个不存在的 pid 就是没有，不炸", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false, enginePid: 7999 }) === null);
+  check("进程级：没给引擎 pid 时这一档整个跳过", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: oneLive, enginePid: null }) === "查竞品定价");
+  asked = null;
+  readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true, enginePid: 7100, meta: { "workbuddy.ai/conversationId": B } });
+  check("协议级压过进程级（调用方自己说的那句最硬）", /0f179b98/.test(asked?.sql || ""), asked?.sql);
+
   {
     const evil = fs.mkdtempSync(path.join(os.tmpdir(), "aic-wb-evil-"));
     fs.mkdirSync(path.join(evil, "sessions"));
     fs.writeFileSync(path.join(evil, "sessions", "8000.json"),
       JSON.stringify({ pid: 8000, kind: "interactive", sessionId: "1' or '1'='1" }));
-    check("带引号的 sessionId 不进 SQL（正则先挡）",
-      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: () => { throw new Error("绝不该拿注入载荷查库"); }, alive: () => true }) === null);
+    const never = () => { throw new Error("绝不该拿注入载荷查库"); };
+    check("带引号的 sessionId 不进 SQL（活会话那条路的正则先挡）",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, alive: () => true }) === null);
+    check("带引号的 _meta.conversationId 不进 SQL（协议级那条路同样先挡）",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, meta: { "workbuddy.ai/conversationId": "1' or '1'='1" } }) === null);
+    check("带引号的 baggage 不进 SQL",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, meta: { baggage: "codebuddy.session_id=x' or 1=1--" } }) === null);
+    check("带引号的引擎记录同样进不去 SQL",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, enginePid: 8000 }) === null);
     fs.rmSync(evil, { recursive: true, force: true });
   }
 
-  const t = readSessionTitle({ clientPid: 0, hostSessionId: null }, { home: wb, env, exec: fakeExec, alive: (p) => p === 7100 });
+  const t = readSessionTitle({ clientPid: 0, hostSessionId: null }, { home: wb, env, exec: fakeExec, alive: oneLive });
   check("readSessionTitle 兜到 WorkBuddy 这条来源", t === "查竞品定价", JSON.stringify(t));
+  const t2 = readSessionTitle(
+    { clientPid: 0, hostSessionId: null },
+    { home: wb, env, exec: fakeExec, alive: () => true, meta: { "workbuddy.ai/conversationId": B } }
+  );
+  check("readSessionTitle 把 _meta 一路传给了 WorkBuddy 这一条（不传的话多开对话就丢会话名）", t2 === "查竞品定价", JSON.stringify(t2));
+  asked = null;
+  const t3 = readSessionTitle(
+    { clientPid: 7100, hostSessionId: null },
+    { home: wb, env, exec: fakeExec, alive: () => true }
+  );
+  check("readSessionTitle 把 clientPid 当作引擎 pid 传下去", t3 === "查竞品定价" && /649aa100/.test(asked?.sql || ""), asked?.sql);
 
   fs.rmSync(wb, { recursive: true, force: true });
 }
@@ -745,7 +854,7 @@ if (typeof zlib.zstdCompressSync !== "function") {
     const idn = readSessionIdentity(localFor(), { home, tmp: path.join(home, "unused-tmp") });
     check("标题与工作区同源于同一段会话", idn.title === "改注册器" && idn.workspace === "my-cool-repo" && idn.workspaceKind === "git", JSON.stringify(idn));
     resetTitleMemo();
-    const other = readSessionIdentity({ clientCommand: "node /a/b.js", clientPid: 1, hostSessionId: null, sessionName: null }, { home });
+    const other = readSessionIdentity({ clientCommand: "node /a/b.js", clientPid: 1, hostSessionId: null, sessionName: null }, { home, env: {} });
     check("非 dsh 客户端走 readSessionIdentity 行为不变（工作区不盖）", other.title === null && other.workspace === null, JSON.stringify(other));
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -970,7 +1079,7 @@ console.log("\n\x1b[1mAntigravity：数据目录自报 + 会话库里的工作�
     fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
     writeRaw(home, `${ID}.db`, agBytes(ID, proj));
     resetTitleMemo();
-    const idn = readSessionIdentity(localFor(), { home, meta: metaFor(), tmp: path.join(home, "unused-tmp") });
+    const idn = readSessionIdentity(localFor(), { home, meta: metaFor(), env: {}, tmp: path.join(home, "unused-tmp") });
     check("readSessionIdentity 接上了：工作区来自会话库", idn.workspace === "ag-wired" && idn.workspaceKind === "git", JSON.stringify(idn));
     check("库里没有 steps 表时标题是 null，工作区照旧", idn.title === null, JSON.stringify(idn));
     resetTitleMemo();
@@ -1518,6 +1627,121 @@ console.log("\n\x1b[1m这一帧是主会话发的，还是哪个 subagent 发的
   fs.rmSync(subs2, { recursive: true, force: true });
   const again = readClaudeSubagent({ "claudecode/toolUseId": "toolu_01Memo00000000000000000" }, local, { home });
   check("查到过就记住，盘上没了也照旧答得出", first?.label === "记住我" && again?.label === "记住我");
+
+  fs.rmSync(home, { recursive: true, force: true });
+}
+
+console.log("\n\x1b[1mopencode：帧里只有 progressToken，靠「这一次调用的工具名 + 收到时刻」回 part 表对账\x1b[0m");
+{
+  const AT = 1789609837611;
+  const SID = "ses_f52f11014ffe5AvaDK6EDroFDE";
+  const CWD = "/private/tmp/aic-oc-probe";
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aic-oc-"));
+  fs.mkdirSync(path.join(home, ".local", "share", "opencode"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".local", "share", "opencode", "opencode.db"), "");
+
+  const toolRow = (o = {}) => ({
+    sid: SID,
+    head: JSON.stringify({ type: "tool", tool: "agent-in-chrome_browser_status", callID: "call_00_x" }),
+    title: "获取浏览器状态原始JSON结果",
+    dir: CWD,
+    ...o,
+  });
+  const filler = (o = {}) => ({ sid: SID, head: JSON.stringify({ type: "step-start" }), title: "获取浏览器状态原始JSON结果", dir: CWD, ...o });
+
+  let asked = null;
+  let calls = [];
+  const execOf = (rows) => (bin, args) => {
+    asked = { bin, args, sql: args[args.length - 1] };
+    calls.push(args);
+    if (rows === "throw") throw new Error("no db");
+    return typeof rows === "string" ? rows : JSON.stringify(rows);
+  };
+  const at = (tool, t, { rows = [toolRow()], opts = {} } = {}) => {
+    resetTitleMemo();
+    calls = [];
+    return opencodeSessionOf(tool, t, { home, env: {}, cwd: CWD, exec: execOf(rows), ...opts });
+  };
+
+  const r = at("browser_status", AT);
+  check("对上了：标题和工作区一起拿回来", r?.title === "获取浏览器状态原始JSON结果" && r?.directory === CWD, JSON.stringify(r));
+  check("走的是系统自带 sqlite3 的只读模式", asked?.bin === "/usr/bin/sqlite3" && asked?.args.includes("-readonly"));
+  check("要的是 JSON 输出，不按分隔符切（标题里有换行/制表符也切不错）", asked?.args.includes(".mode json"));
+  check("SQL 带 ±3s 时间窗", /between 1789609834611 and 1789609840611/.test(asked?.sql || ""), asked?.sql);
+
+  check(
+    "server 名换了（按 _<工具名> 后缀认）照样对得上",
+    at("browser_status", AT, { rows: [toolRow({ head: JSON.stringify({ type: "tool", tool: "我的浏览器_browser_status" }) })] })?.title ===
+      "获取浏览器状态原始JSON结果"
+  );
+  check(
+    "窗里别的工具的行不算数",
+    at("browser_status", AT, { rows: [toolRow({ head: JSON.stringify({ type: "tool", tool: "agent-in-chrome_browser_click" }) })] }) === null
+  );
+  check("同一会话的多行（step-start / reasoning / tool）收敛成一个候选", at("browser_status", AT, { rows: [filler(), filler(), toolRow()] })?.title === "获取浏览器状态原始JSON结果");
+
+  check("窗内两个会话都调了同一个工具：null，不猜", at("browser_status", AT, { rows: [toolRow(), toolRow({ sid: "ses_other00000000000000000" })] }) === null);
+
+  const r6 = at("browser_status", AT, { rows: [toolRow({ title: "New session - 2026-09-17T01:50:32.427Z" })] });
+  check("New session - <ISO> 是占位标题，不算名字；工作区照样留着", r6?.title === null && r6?.directory === CWD, JSON.stringify(r6));
+
+  check("会话目录对不上我们被 spawn 的目录：null", at("browser_status", AT, { rows: [toolRow({ dir: "/Users/u/proj-b" })] }) === null);
+  check("畸形会话 id 一律不认（它要拼进下一段 SQL）", at("browser_status", AT, { rows: [toolRow({ sid: "ses_x' or 1=1 --" })] }) === null);
+
+  resetTitleMemo();
+  calls = [];
+  check(
+    "工具名带引号/分号：null 且一次盘都不查",
+    opencodeSessionOf("x'; drop table part; --", AT, { home, env: {}, cwd: CWD, exec: execOf([toolRow()]) }) === null && calls.length === 0,
+    JSON.stringify(calls)
+  );
+  resetTitleMemo();
+  calls = [];
+  check(
+    "大写工具名不认（我们自己的工具名全小写）",
+    opencodeSessionOf("Browser_Status", AT, { home, env: {}, cwd: CWD, exec: execOf([toolRow()]) }) === null && calls.length === 0
+  );
+
+  check("库读不动：null，不编", at("browser_status", AT, { rows: "throw" }) === null);
+  check("输出不是 JSON：null", at("browser_status", AT, { rows: "not json at all" }) === null);
+  check("窗里一行都没有：null", at("browser_status", AT, { rows: [] }) === null);
+
+  resetTitleMemo();
+  let reads = 0;
+  const counting = () => {
+    reads += 1;
+    return JSON.stringify([toolRow()]);
+  };
+  const c1 = opencodeSessionOf("browser_status", AT, { home, env: {}, cwd: CWD, exec: counting });
+  const c2 = opencodeSessionOf("browser_status", AT, { home, env: {}, cwd: CWD, exec: counting });
+  check("同一次调用只查一次盘", c1?.title === "获取浏览器状态原始JSON结果" && c2?.title === c1.title && reads === 1, `查了 ${reads} 次`);
+
+  check("默认落在 ~/.local/share/opencode", opencodeDataDir({ env: {}, home: "/h" }) === path.join("/h", ".local", "share", "opencode"));
+  check("XDG_DATA_HOME 覆盖（写死路径会读到另一个安装的库）", opencodeDataDir({ env: { XDG_DATA_HOME: "/x" }, home: "/h" }) === "/x/opencode");
+
+  check("认 CLI（brew 里那个真身）", isOpencodeClient("/opt/homebrew/Cellar/opencode/1.18.31/bin/opencode"));
+  check("认桌面端", isOpencodeClient("/Applications/OpenCode.app/Contents/MacOS/OpenCode"));
+  check("不认同前缀的别的程序", !isOpencodeClient("/usr/local/bin/opencode-helper --x"));
+  check("不认 Claude Code", !isOpencodeClient("/usr/local/bin/claude --mcp-config {}"));
+
+  resetTitleMemo();
+  calls = [];
+  const viaTitle = readSessionTitle(
+    { clientCommand: "/opt/homebrew/bin/opencode", clientPid: 1 },
+    { home, env: {}, exec: execOf([toolRow({ dir: process.cwd() })]), tool: "browser_status", at: AT }
+  );
+  check("接上了：opencode 的帧读得出会话名", viaTitle === "获取浏览器状态原始JSON结果", String(viaTitle));
+  resetTitleMemo();
+  calls = [];
+  const notOurs = readSessionTitle(
+    { clientCommand: "/usr/local/bin/claude", clientPid: 1 },
+    { home, env: {}, exec: execOf([toolRow({ dir: process.cwd() })]), tool: "browser_status", at: AT }
+  );
+  check(
+    "别家客户端不为这条路付代价（opencode 那条查询一次都没发）",
+    notOurs === null && calls.every((a) => !a.includes(".mode json")),
+    JSON.stringify(calls)
+  );
 
   fs.rmSync(home, { recursive: true, force: true });
 }

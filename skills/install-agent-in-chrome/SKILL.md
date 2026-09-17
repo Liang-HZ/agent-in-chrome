@@ -7,7 +7,7 @@ description: 把 agent-in-chrome 装到用户机器上、接到某个 agent 客�
 
 这份 skill 是**给你（agent）照着执行的流程**，不是给人读的教程。每一步都有判据；判据不满足就停下来问用户，不要往下猜。
 
-安装器（`npx @liang-hz/agent-in-chrome`）负责所有确定性的活：native host 清单该写进哪个目录 / 哪个注册表键、扩展 ID 白名单、固化 node 绝对路径的启动器、16 家已收录客户端各自的配置文件位置与条目形状。**你的活是编排、判断和补空缺**，不是重新推导这些路径——推导出来的路径写进去，客户端只会报一句 `Connection closed`，用户完全无从下手。
+安装器（`npx @liang-hz/agent-in-chrome`）负责所有确定性的活：native host 清单该写进哪个目录 / 哪个注册表键、扩展 ID 白名单、固化 node 绝对路径的启动器、17 家已收录客户端各自的配置文件位置与条目形状。**你的活是编排、判断和补空缺**，不是重新推导这些路径——推导出来的路径写进去，客户端只会报一句 `Connection closed`，用户完全无从下手。
 
 ## 第 0 步：先探环境，别急着装
 
@@ -249,4 +249,4 @@ Windows 上写客户端配置时，**`command` 一律用 `print-config` 给的�
 
 - [README 快速开始](../../README.md#快速开始) · [两种模式](../../README.md#两种模式) · [安全与透明度](../../README.md#安全与透明度)
 - [docs/CLI.md](../../docs/CLI.md)：没有桌面 Chrome 时的 CLI / headless 模式、环境变量、把登录态借过来
-- [docs/AGENTS.md](../../docs/AGENTS.md)：16 家已收录客户端各自的配置路径与条目形状（安装器写的就是这些，用来核对）
+- [docs/AGENTS.md](../../docs/AGENTS.md)：17 家已收录客户端各自的配置路径与条目形状（安装器写的就是这些，用来核对）

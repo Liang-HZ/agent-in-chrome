@@ -70,6 +70,12 @@ export function bundleMatch(command) {
   return name ? { name, appDir: `${outerHead}.app` } : null;
 }
 
+function livesInBundle(command, appDir) {
+  if (!appDir) return false;
+  const s = String(command || "").trim().replace(/^"/, "");
+  return s.startsWith(`${appDir}/`);
+}
+
 const bundleVersionMemo = new Map();
 export function readBundleVersion(appDir, { exec = execFileSync } = {}) {
   if (!appDir || typeof appDir !== "string") return null;
@@ -136,9 +142,13 @@ export function exePathOf(command) {
 /*
  * 沿父进程链找形态与品牌的证据，先撞见哪个算哪个：
  *
- *   撞见有终端的进程          → CLI（从命令行起来的）
- *   撞见 .app 包             → 桌面端，顺带拿到包名当品牌候选
- *   一路走到 launchd 都没终端 → 桌面端（GUI 进程的典型形状，如 ZCode）
+ *   撞见有终端的进程            → CLI（从命令行起来的）
+ *   撞见**客户端自己的** .app   → 桌面端，顺带拿到包名当品牌候选
+ *   一路走到 launchd 都没终端   → 桌面端（GUI 进程的典型形状，如 ZCode）
+ *
+ * 第二条的「自己的」是必要条件：链上撞见的 `.app` 未必装着客户端——从桌面端里起的
+ * CLI 就会撞见**启动它的那个 app**。这种包不认，就地返回「无证据」，让上层回落到
+ * 客户端自报的名字（继续往上走也一样错，上面只有那个 app 的其它进程）。
  *
  * Windows 上三条证据各有对应物，判据不同、结论一模一样：
  *
@@ -158,6 +168,7 @@ export function walkSurface(startPid, snap, { maxHops = 6, platform = process.pl
   const none = { surface: null, brand: null, appDir: null, why: "无证据" };
   let pid = Number(startPid);
   let prev = null;
+  const startCommand = snap.get(pid)?.command;
   for (let hop = 0; hop < maxHops; hop++) {
     if (!Number.isInteger(pid) || pid <= 1) break;
     const p = snap.get(pid);
@@ -166,7 +177,10 @@ export function walkSurface(startPid, snap, { maxHops = 6, platform = process.pl
     if (win && isWinTerminal(p.name)) return { surface: "cli", brand: binShimName(p.command), appDir: null, why: `${p.name}@${pid}` };
     if (win && isWinRoot(p.name)) return prev ? guiSurface(prev, `${p.name} 直属@${pid}`) : none;
     const b = bundleMatch(p.command);
-    if (b) return { surface: "app", brand: b.name, appDir: b.appDir, why: `${b.name}.app@${pid}` };
+    if (b) {
+      if (!livesInBundle(startCommand, b.appDir)) return none;
+      return { surface: "app", brand: b.name, appDir: b.appDir, why: `${b.name}.app@${pid}` };
+    }
     if (!Number.isInteger(p.ppid) || p.ppid <= 1) {
       return { surface: "app", brand: plainName(p.command) || binShimName(p.command), appDir: null, why: `launchd 直属、无终端@${pid}` };
     }
@@ -432,9 +446,57 @@ export function readClaudeSubagent(meta, local, { fs = fsMod, home = osMod.homed
   return null;
 }
 
-export function readWorkbuddySessionTitle({ env = process.env, fs = fsMod, exec = execFileSync, alive = pidAlive } = {}) {
+export function readWorkbuddySessionTitle({
+  env = process.env,
+  fs = fsMod,
+  exec = execFileSync,
+  alive = pidAlive,
+  meta = null,
+  enginePid = null,
+} = {}) {
   const dir = typeof env.WORKBUDDY_CONFIG_DIR === "string" ? env.WORKBUDDY_CONFIG_DIR : "";
   if (!path.isAbsolute(dir)) return null;
+  const id =
+    workbuddyConversationId(meta) ||
+    workbuddyEngineSession(dir, enginePid, { fs }) ||
+    workbuddyOnlyLiveSession(dir, { fs, alive });
+  if (!id) return null;
+  /* `${id}` 是直接拼进 SQL 字符串的（sqlite3 CLI 不好参数化），所以上面三个来源都必须
+   * 先过 CONV_UUID_RE 才走得到这里：把那个锚放宽就等于开一个注入口。 */
+  try {
+    const out = exec(
+      process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3",
+      ["-readonly", path.join(dir, "workbuddy.db"), `select coalesce(custom_title, title) from sessions where id='${id}' and deleted_at is null`],
+      { encoding: "utf8", timeout: 2000 }
+    );
+    return clip(String(out || "").trim(), 60);
+  } catch {
+    return null;
+  }
+}
+
+export function workbuddyConversationId(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  const direct = String(meta["workbuddy.ai/conversationId"] ?? "").trim();
+  const m = /(?:^|[,\s])codebuddy\.session_id=([^\s,;]+)/.exec(String(meta.baggage ?? ""));
+  const id = direct || (m ? m[1].trim() : "");
+  return CONV_UUID_RE.test(id) ? id : null;
+}
+
+function workbuddyEngineSession(dir, enginePid, { fs = fsMod } = {}) {
+  if (!Number.isInteger(enginePid) || enginePid <= 1) return null;
+  try {
+    const d = JSON.parse(fs.readFileSync(path.join(dir, "sessions", `${enginePid}.json`), "utf8"));
+    if (!d || typeof d !== "object" || Number(d.pid) !== enginePid) return null;
+    if (d.kind !== "interactive") return null;
+    const sid = String(d.sessionId || "");
+    return CONV_UUID_RE.test(sid) ? sid : null;
+  } catch {
+    return null;
+  }
+}
+
+function workbuddyOnlyLiveSession(dir, { fs = fsMod, alive = pidAlive } = {}) {
   const live = [];
   try {
     for (const f of fs.readdirSync(path.join(dir, "sessions")).slice(0, 100)) {
@@ -443,7 +505,7 @@ export function readWorkbuddySessionTitle({ env = process.env, fs = fsMod, exec 
         const d = JSON.parse(fs.readFileSync(path.join(dir, "sessions", f), "utf8"));
         if (d?.kind !== "interactive") continue;
         const sid = String(d.sessionId || "");
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) continue;
+        if (!CONV_UUID_RE.test(sid)) continue;
         if (!Number.isInteger(d.pid) || d.pid <= 1 || !alive(d.pid)) continue;
         live.push(sid);
       } catch {}
@@ -451,17 +513,7 @@ export function readWorkbuddySessionTitle({ env = process.env, fs = fsMod, exec 
   } catch {
     return null;
   }
-  if (live.length !== 1) return null;
-  try {
-    const out = exec(
-      process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3",
-      ["-readonly", path.join(dir, "workbuddy.db"), `select coalesce(custom_title, title) from sessions where id='${live[0]}' and deleted_at is null`],
-      { encoding: "utf8", timeout: 2000 }
-    );
-    return clip(String(out || "").trim(), 60);
-  } catch {
-    return null;
-  }
+  return live.length === 1 ? live[0] : null;
 }
 
 export function pidAlive(pid) {
@@ -527,10 +579,19 @@ const titleMemo = new Map();
 const TITLE_MISS_BACKOFF_MS = 20_000;
 const TITLE_MISS_BACKOFF_MAX_MS = 300_000;
 const TITLE_MEMO_MAX = 200;
-function missBackoff(misses) {
-  return Math.min(TITLE_MISS_BACKOFF_MS * 2 ** Math.max(0, misses - 1), TITLE_MISS_BACKOFF_MAX_MS);
+function missBackoff(misses, base = TITLE_MISS_BACKOFF_MS) {
+  return Math.min(base * 2 ** Math.max(0, misses - 1), TITLE_MISS_BACKOFF_MAX_MS);
 }
-function memoTitle(key, lookup, now = Date.now()) {
+/*
+ * 记忆化。查到的值原样存着（默认是标题字符串，opencode 那条存的是
+ * `{title, directory}` 一个小对象——这里只管「命中就不再查」，不管值是什么形状）。
+ *
+ * `missRetryMs` 只有 opencode 那条路在改：它的「没查到」有两种成因，一种会自己好
+ * （对账窗口里那行 part 还没落盘，一两秒后就有了），一种不会（这个客户端根本不是
+ * opencode）。默认那套 20s→5min 的指数退避是为后者设计的，用在它身上会把第一种
+ * 挡死——而 refreshAgentInfo 的 TTL 只有 5s，退避比 TTL 长等于永远等不到重试。
+ */
+function memoTitle(key, lookup, now = Date.now(), missRetryMs = null) {
   const hit = titleMemo.get(key);
   if (hit && (hit.title || now < hit.nextTryAt)) return hit.title;
   let title = null;
@@ -541,7 +602,7 @@ function memoTitle(key, lookup, now = Date.now()) {
   }
   if (titleMemo.size >= TITLE_MEMO_MAX) titleMemo.clear();
   const misses = title ? 0 : (hit?.misses || 0) + 1;
-  titleMemo.set(key, { title, misses, nextTryAt: now + missBackoff(misses) });
+  titleMemo.set(key, { title, misses, nextTryAt: now + missBackoff(misses, missRetryMs ?? TITLE_MISS_BACKOFF_MS) });
   return title;
 }
 
@@ -837,12 +898,13 @@ export function readDshSession(local, { env = process.env, home = osMod.homedir(
   return { id, title: title || null, cwd: cwd || null };
 }
 
-/* 会话 id 进路径与提取流程前的锚（安全边界，勿放宽）：只放行 UUID 形状，`..`、`/`、
+/* 会话 id 进路径、SQL 与提取流程前的锚（安全边界，勿放宽）：只放行 UUID 形状，`..`、`/`、
  * 引号一概进不来——id 来自 MCP 调用方给的 _meta，是外部输入。
  *
- * Antigravity 的 conversation_id 和 Codex 的 thread_id 是同一个形状，**共用这一个
- * RegExp 对象**：两家的 id 都会被拼进文件路径、也都会被 server.mjs 的 sidFor 拼进
- * 扩展侧那张全局 sessions Map 的键。各写一份正则就是「将来只改一边，一边收一边不收」。 */
+ * Antigravity 的 conversation_id、Codex 的 thread_id、WorkBuddy 的 conversationId 是同一个
+ * 形状，**共用这一个 RegExp 对象**：三家的 id 分别会被拼进文件路径、sqlite 的 SQL 字符串、
+ * 以及 server.mjs 的 sidFor 拼进扩展侧那张全局 sessions Map 的键。各写一份正则就是
+ * 「将来只改一边，一边收一边不收」。 */
 const CONV_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function antigravityDataDir(clientCommand, { home = osMod.homedir() } = {}) {
@@ -1075,6 +1137,79 @@ export function readCodexSessionTitle(meta, { env = process.env, home = osMod.ho
   });
 }
 
+export function opencodeDataDir({ env = process.env, home = osMod.homedir() } = {}) {
+  const xdg = typeof env.XDG_DATA_HOME === "string" ? env.XDG_DATA_HOME.trim() : "";
+  return path.join(xdg || path.join(home, ".local", "share"), "opencode");
+}
+
+export function isOpencodeClient(clientCommand) {
+  const s = String(clientCommand || "");
+  if (/[\\/]OpenCode\.app[\\/]Contents[\\/]MacOS[\\/]/i.test(s)) return true;
+  return /(^|[\\/\s])opencode(\.exe)?(\s|$)/i.test(s);
+}
+
+const OPENCODE_CALL_WINDOW_MS = 3000;
+const OPENCODE_MISS_RETRY_MS = 2000;
+const OPENCODE_PART_HEAD = 240;
+
+function opencodeRealTitle(v) {
+  const s = clip(v, 60);
+  if (!s) return null;
+  return s.startsWith("New session - ") ? null : s;
+}
+
+function sameDir(a, b) {
+  const norm = (p) => {
+    const s = path.resolve(String(p || ""));
+    return process.platform === "win32" ? s.toLowerCase() : s;
+  };
+  return norm(a) === norm(b);
+}
+
+export function opencodeSessionOf(tool, at, { env = process.env, home = osMod.homedir(), fs = fsMod, exec = execFileSync, cwd = process.cwd() } = {}) {
+  const name = typeof tool === "string" ? tool.trim() : "";
+  const t = Number(at);
+  if (!name || !Number.isFinite(t)) return null;
+  if (!/^[a-z][a-z0-9_]{0,60}$/.test(name)) return null;
+  const db = path.join(opencodeDataDir({ env, home }), "opencode.db");
+  if (!fs.existsSync(db)) return null;
+  return memoTitle(
+    `opencode:${db}:${name}:${t}`,
+    () => {
+      const sql =
+        `select p.session_id as sid, substr(p.data,1,${OPENCODE_PART_HEAD}) as head, ` +
+        "s.title as title, s.directory as dir from part p " +
+        "left join session s on s.id = p.session_id " +
+        `where p.time_created between ${t - OPENCODE_CALL_WINDOW_MS} and ${t + OPENCODE_CALL_WINDOW_MS}`;
+      const out = exec("/usr/bin/sqlite3", ["-readonly", "-cmd", ".mode json", db, sql], {
+        encoding: "utf8",
+        timeout: 2000,
+      });
+      let rows = null;
+      try {
+        rows = JSON.parse(String(out || "").trim() || "[]");
+      } catch {
+        return null;
+      }
+      if (!Array.isArray(rows)) return null;
+      const toolRe = new RegExp('"tool":"[^"]*_' + name + '"');
+      const hits = rows.filter((r) => r && typeof r.head === "string" && toolRe.test(r.head));
+      const sids = [...new Set(hits.map((r) => String(r.sid || "")))].filter(Boolean);
+      if (sids.length !== 1) return null;
+      if (!/^ses_[A-Za-z0-9]+$/.test(sids[0])) return null;
+      const row = hits.find((r) => String(r.sid) === sids[0]);
+      if (!row) return null;
+      const dir = typeof row.dir === "string" && row.dir ? row.dir : null;
+      if (dir && !sameDir(dir, cwd)) return null;
+      const title = opencodeRealTitle(row.title);
+      if (!title && !dir) return null;
+      return { title, directory: dir };
+    },
+    Date.now(),
+    OPENCODE_MISS_RETRY_MS
+  );
+}
+
 /*
  * 现在这一刻的会话标题。
  *
@@ -1085,7 +1220,7 @@ export function readCodexSessionTitle(meta, { env = process.env, home = osMod.ho
  * 分不出是哪段对话时（整个 app 共用一个 MCP 进程、帧里又没有会话身份）一律返回 null，
  * 不拿时间窗口去猜。
  */
-export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), env = process.env, exec = execFileSync, alive = pidAlive, meta = null, dsh } = {}) {
+export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), env = process.env, exec = execFileSync, alive = pidAlive, meta = null, dsh, tool = null, at = null } = {}) {
   if (!local) return null;
   const zc = readZcodeSessionTitle(meta, { env, home, fs, exec });
   if (zc) return zc;
@@ -1095,13 +1230,17 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
   if (ag) return ag;
   const cx = readCodexSessionTitle(meta, { env, home, fs });
   if (cx) return cx;
+  if (isOpencodeClient(local.clientCommand)) {
+    const oc = opencodeSessionOf(tool, at, { env, home, fs, exec });
+    if (oc?.title) return oc.title;
+  }
   const ds = dsh !== undefined ? dsh : readDshSession(local, { env, home, fs });
   if (ds?.title) return ds.title;
   const t = readHostSessionTitle(local.hostSessionId, { fs, home, env });
   if (t) return t;
   const file = readClientSessionFile(local.clientPid, { fs, home });
   if (file && file.nameSource !== "derived") return clip(file.name, 60);
-  const wb = readWorkbuddySessionTitle({ env, fs, exec, alive });
+  const wb = readWorkbuddySessionTitle({ env, fs, exec, alive, meta, enginePid: local.clientPid });
   if (wb) return wb;
   return local.sessionName || null;
 }
@@ -1114,12 +1253,13 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
  * 那份工作区是进程级的、算一次就定死，所以这里另给一条会话级的出口；没有会话级证据的
  * 客户端返回 null，调用方照用进程级的那份。
  */
-export function readSessionIdentity(local, { fs = fsMod, home = osMod.homedir(), env = process.env, exec = execFileSync, alive = pidAlive, meta = null, tmp } = {}) {
+export function readSessionIdentity(local, { fs = fsMod, home = osMod.homedir(), env = process.env, exec = execFileSync, alive = pidAlive, meta = null, tmp, tool = null, at = null } = {}) {
   if (!local) return { title: null, workspace: null, workspaceKind: null };
   const ds = readDshSession(local, { env, home, fs });
-  const title = readSessionTitle(local, { fs, home, env, exec, alive, meta, dsh: ds });
+  const title = readSessionTitle(local, { fs, home, env, exec, alive, meta, dsh: ds, tool, at });
   const agDir = readAntigravityWorkspace(meta, local, { fs, home });
-  const wsDir = ds?.cwd || agDir;
+  const oc = isOpencodeClient(local.clientCommand) ? opencodeSessionOf(tool, at, { env, home, fs, exec }) : null;
+  const wsDir = ds?.cwd || agDir || oc?.directory;
   const ws = wsDir ? readWorkspace(wsDir, tmp !== undefined ? { fs, home, tmp } : { fs, home }) : null;
   return { title, workspace: ws?.name || null, workspaceKind: ws?.kind || null };
 }

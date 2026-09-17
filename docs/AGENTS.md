@@ -2,7 +2,7 @@
 
 > 安装器（`npx @liang-hz/agent-in-chrome install`）会自动写好这一切，**正常情况下你不需要读这个文件**。
 > 它存在的用途：核对安装器到底写了什么、或在不能跑安装器的环境里手动登记。
-> 从 [README](../README.md) 挪出来，免得 16 家客户端的配置路径挡在快速开始的正路上。
+> 从 [README](../README.md) 挪出来，免得 17 家客户端的配置路径挡在快速开始的正路上。
 
 安装器会自动写好这些；下面是它实际写入的文件和内容，供你核对或手动登记。把 `<RUNTIME>` 换成安装器打印的实际路径（默认 `~/.agent-in-chrome/agent-in-chrome`）。每个文件改前都会留 `.bak-<时间戳>` 备份，且只动 `agent-in-chrome` 这一个键。
 
@@ -40,6 +40,24 @@ claude mcp add --scope user agent-in-chrome -- node <RUNTIME>/server.mjs
 > 同样是 GUI 应用，同样走 `mcp-launcher.sh`。
 > 同目录那个隐藏的 `.mcp.json` 是 WorkBuddy 自己的**输出**文件（每次启动写 connector-proxy 聚合条目），
 > 往里写注册它不读；装的时候会顺带把老版本写错在那里的条目摘掉。
+
+**WorkBuddy AI**（国际版，`~/.workbuddy-ai/mcp.json`，**非隐藏**那份）:
+```json
+{ "mcpServers": { "agent-in-chrome": {
+  "type": "stdio", "command": "<RUNTIME>/mcp-launcher.sh", "args": [], "disabled": false
+} } }
+```
+> 和国内版是**同一份代码、只换数据目录**（`cli/product.json` 的 `dataFolderName`：国内版
+> `.workbuddy`、国际版 `.workbuddy-ai`），所以条目形状、文件名、`readCustomMcpConfig`
+> 的读法全都逐字相同——只是目录不同，**两家各写各的，互不覆盖**。
+> 没有 legacy 要清：历史上写错的隐藏 `.mcp.json` 只落在国内版目录下。
+>
+> **国际版多一道信任闸**：第三方 MCP server 写进 `mcp.json` 后，连接器中心里会显示为
+> 「需要你的授权」（`trustLevel: gray` + `status: disabled`），点一下信任才会连。
+> 信任记录在 `~/.workbuddy-ai/mcp-approvals.json`，键是
+> `sha256(command|args|envKeys)::serverName`——**它是进程启动时一次性加载的**，
+> 所以在应用运行期间手改这个文件无效，只能在 UI 里点（或改完重启应用）。
+> 国内版同一套机制，落点是 `~/.workbuddy/mcp-approvals.json`。
 
 **ZCode**（`~/.zcode/cli/config.json`，段落是 `mcp.servers`）、**opencode**（`~/.config/opencode/opencode.json`，段落是 `mcp`，`command` 是数组且要 `enabled: true`）、
 **Kimi CLI**（`~/.kimi/mcp.json`）、**Gemini CLI**（`~/.gemini/settings.json`）——

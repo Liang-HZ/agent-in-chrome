@@ -107,7 +107,7 @@ schema 写进去。路径靠猜是这件事最常见的失败方式：猜错了�
 安装器会（全部可逆、动手前列出将改动的文件）：
 
 1. 把运行时同步到 `~/.agent-in-chrome/agent-in-chrome/`，并把 native host 清单写进你各个 Chromium 浏览器的 `NativeMessagingHosts/` 目录；
-2. 探测本机的 agent（Claude Code / Claude Desktop / WorkBuddy / ZCode / opencode / Kimi CLI / Gemini CLI / Antigravity / Qoder CLI / Qoder IDE / Trae / Codex CLI / DeepSeek Harness，以及国内版 Qoder CN CLI / Qoder CN IDE / Trae CN，共 16 家），逐个展示将写入的文件和内容、确认后在各自的 MCP 配置里注册（改前自动备份；`--yes` 跳过逐个确认，`--agents=claude-code,trae` 限定范围，`--no-agents` 完全跳过）；
+2. 探测本机的 agent（Claude Code / Claude Desktop / WorkBuddy / WorkBuddy AI / ZCode / opencode / Kimi CLI / Gemini CLI / Antigravity / Qoder CLI / Qoder IDE / Trae / Codex CLI / DeepSeek Harness，以及国内版 Qoder CN CLI / Qoder CN IDE / Trae CN，共 17 家），逐个展示将写入的文件和内容、确认后在各自的 MCP 配置里注册（改前自动备份；`--yes` 跳过逐个确认，`--agents=claude-code,trae` 限定范围，`--no-agents` 完全跳过）；
 3. 在本机生成一个**每台机器唯一的连接令牌**（`0600`，不写进仓库、不上传）——见[安全与透明度](#安全与透明度)；
 4. 把**两份 skill 和两条命令**装好：`skills/agent-in-chrome/`（含 `references/` 下的分册手册，教 agent 怎么用这些浏览器工具）和 `skills/install-agent-in-chrome/`（教 agent 怎么把它装到别的客户端上）拷到 `~/.agent-in-chrome/skills/`，`/agent-in-chrome` 与 `/install-agent-in-chrome` 两条命令拷到 `~/.agent-in-chrome/commands/`。
 

@@ -340,9 +340,12 @@ console.log("\n\x1b[1m5. 被关掉的工具走 isError 的内容（SEP-1303）\x
   s.p.kill();
 }
 
-console.log("\n\x1b[1m6. _meta 前缀零冲突：四家客户端实样过 sidFor 的结果\x1b[0m");
+console.log("\n\x1b[1m6. _meta 前缀零冲突：六家客户端实样过 sidFor 的结果\x1b[0m");
 {
-  const s = startServer("sid");
+  const s = startServer("sid", {
+    CODEX_HOME: path.join(TMP, "sid", "codex-none"),
+    WORKBUDDY_CONFIG_DIR: path.join(TMP, "sid", "workbuddy-none"),
+  });
   await s.rpc("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "proto-test", version: "0" } });
   const h = fakeHost(s.sock, s.token, { status: () => ({ version: "0.54.0", connected: true, session: "x", tabs: [] }) });
   check("假 host 连上了", await until(() => h.seen.length >= 0 && sockUp(s.sock)));
@@ -353,6 +356,18 @@ console.log("\n\x1b[1m6. _meta 前缀零冲突：四家客户端实样过 sidFor
     ["ZCode", { session_id: "zc-sess-123" }, "proto-sid::zc-sess-123"],
     ["Trae", { chatSessionId: "trae-chat-9" }, "proto-sid"],
     ["Antigravity", { "antigravity.google/conversation_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301" }, "proto-sid::3f2504e0-4f89-11d3-9a0c-0305e82c3301"],
+    ["Codex", { "x-codex-turn-metadata": { session_id: "01a0935a", thread_id: "01a0935a-5d74-7680-8d59-be86c5e590c3" } }, "proto-sid"],
+    [
+      "WorkBuddy",
+      {
+        modelId: "deepseek-v4.1-flash",
+        "workbuddy.ai/conversationId": "cbc4f14a-d217-420a-8e2b-222eb87c0e76",
+        "workbuddy.ai/mode": "craft",
+        baggage: "codebuddy.session_id=cbc4f14a-d217-420a-8e2b-222eb87c0e76",
+        progressToken: 9,
+      },
+      "proto-sid",
+    ],
   ];
   for (const [who, meta, wantSid] of samples) {
     const before = h.seen.length;
@@ -369,6 +384,82 @@ console.log("\n\x1b[1m6. _meta 前缀零冲突：四家客户端实样过 sidFor
     written.length > 0 && written.every((k) => k === "META_SERVER_INFO"),
     written.join("、")
   );
+
+  {
+    const wbBin = process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3";
+    let sqliteOk = true;
+    try {
+      execFileSync(wbBin, ["--version"], { stdio: "ignore" });
+    } catch {
+      sqliteOk = false;
+    }
+    if (!sqliteOk) {
+      console.log(`  \x1b[90m·\x1b[0m 本机没有 ${wbBin}，跳过「帧上带出会话名」；WorkBuddy 的标题本来就要靠它读库`);
+    } else {
+      const WB_CONV = "cbc4f14a-d217-420a-8e2b-222eb87c0e76";
+      const WB_TITLE = "继续完成日志中断的任务";
+      const wbDir = path.join(TMP, "workbuddy");
+      fs.mkdirSync(path.join(wbDir, "sessions"), { recursive: true });
+      execFileSync(wbBin, [
+        path.join(wbDir, "workbuddy.db"),
+        `create table sessions(id text primary key, title text, custom_title text, deleted_at integer);
+         insert into sessions values('${WB_CONV}','这是一句自动生成的标题','${WB_TITLE}',null);`,
+      ]);
+      const stub = path.join(TMP, "ps-stub.cjs");
+      fs.writeFileSync(
+        stub,
+        [
+          'const cp = require("node:child_process");',
+          "const real = cp.execFileSync;",
+          'const TABLE = JSON.parse(process.env.AIC_FAKE_PS || "{}");',
+          "cp.execFileSync = function (file, args) {",
+          '  if (file === "/bin/ps" || file === "ps") {',
+          "    const e = TABLE[String(args[args.length - 1])];",
+          "    if (!e) { const err = new Error('ps: 夹具进程表里没有这个 pid'); err.status = 1; throw err; }",
+          "    return `${e.ppid}  ${e.tty}  ${e.command}\\n`;",
+          "  }",
+          "  return real.apply(this, arguments);",
+          "};",
+          "",
+        ].join("\n")
+      );
+      const wbSrv = startServer("wb-title", {
+        WORKBUDDY_CONFIG_DIR: wbDir,
+        NODE_OPTIONS: `--require ${stub}`,
+        AIC_FAKE_PS: JSON.stringify({
+          [process.pid]: { ppid: 1, tty: "??", command: `node ${process.argv[1]}` },
+        }),
+      });
+      await wbSrv.rpc("initialize", {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "connector:custom-mcp:agent-in-chrome", version: "1.0.0" },
+      });
+      const wbHost = fakeHost(wbSrv.sock, wbSrv.token, { status: () => ({ connected: true }) });
+      await until(() => sockUp(wbSrv.sock));
+      await wbSrv.rpc("tools/call", {
+        name: "browser_status",
+        arguments: {},
+        _meta: {
+          modelId: "deepseek-v4.1-flash",
+          "workbuddy.ai/conversationId": WB_CONV,
+          "workbuddy.ai/mode": "craft",
+          baggage: `codebuddy.session_id=${WB_CONV}`,
+          progressToken: 198,
+        },
+      });
+      const hit = wbHost.seen.find((f) => f.type === "call" && f.tool === "status");
+      check(
+        "WorkBuddy 的帧上带着会话名（agent.session 来自 workbuddy.db）",
+        hit?.agent?.session === WB_TITLE,
+        JSON.stringify(hit?.agent)
+      );
+      check("壳里报的是连接器代理名时，品牌那一段不编（Surface 照旧有）", hit?.agent?.title === null && hit?.agent?.surface === "app", JSON.stringify(hit?.agent));
+      wbHost.c.destroy();
+      wbSrv.p.kill();
+    }
+  }
+
   h.c.destroy();
   s.p.kill();
 }

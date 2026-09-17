@@ -33,6 +33,7 @@ const GUARDED = [
   path.join(REAL_HOME, ".gemini", "settings.json"),
   path.join(REAL_HOME, ".gemini", "config", "mcp_config.json"),
   path.join(REAL_HOME, ".workbuddy", "mcp.json"),
+  path.join(REAL_HOME, ".workbuddy-ai", "mcp.json"),
   path.join(REAL_HOME, ".qoder", "settings.json"),
   path.join(REAL_HOME, ".qoder-cn", "settings.json"),
 ];
@@ -828,7 +829,7 @@ console.log("\n\x1b[1mWindows 的 GUI 条目形状：cmd /c\x1b[0m");
     const p = list.find((a) => a.id === id)?.preview;
     return JSON.stringify((typeof p === "function" ? p() : p) || []);
   };
-  for (const id of ["claude-desktop", "workbuddy", "zcode", "antigravity", "qoder-ide", "trae", "qoder-ide-cn", "trae-cn"]) {
+  for (const id of ["claude-desktop", "workbuddy", "workbuddy-ai", "zcode", "antigravity", "qoder-ide", "trae", "qoder-ide-cn", "trae-cn"]) {
     const p = entryOf(winAgents, id);
     check(`${id}：win32 上是 cmd /c 包一层`, p.includes('\\"command\\": \\"cmd\\"') && p.includes("/c") && p.includes("mcp-launcher.bat"), p.slice(0, 200));
   }
@@ -839,7 +840,7 @@ console.log("\n\x1b[1mWindows 的 GUI 条目形状：cmd /c\x1b[0m");
     entryOf(winAgents, "deepseek-harness")
   );
   check("CLI 客户端不受影响（还是 node + server.mjs）", entryOf(winAgents, "kimi").includes('\\"command\\": \\"node\\"'), entryOf(winAgents, "kimi"));
-  for (const id of ["claude-desktop", "workbuddy", "zcode", "trae"]) {
+  for (const id of ["claude-desktop", "workbuddy", "workbuddy-ai", "zcode", "trae"]) {
     const p = entryOf(darwinAgents, id);
     check(`${id}：darwin 形状不变（command 就是启动器本身）`, p.includes("/rt/mcp-launcher.sh") && !p.includes("cmd"), p.slice(0, 200));
   }
@@ -941,6 +942,53 @@ console.log("\n\x1b[1m探测：没有证据就不算装着\x1b[0m");
   check("PATH 上有二进制时 binOnPath 为真", withBin.binOnPath === true && withBin.detected === true);
   check("撤掉之后就为假（这个字段不是恒真的摆设）", withoutBin.binOnPath === false, `本机 PATH 上是不是真装着 kimi：${withoutBin.binOnPath}`);
   fs.rmSync(fakeBin, { recursive: true, force: true });
+}
+
+console.log("\n\x1b[1mWorkBuddy AI：与国内版互不串写\x1b[0m");
+{
+  const cnRel = ".workbuddy/mcp.json";
+  const aiRel = ".workbuddy-ai/mcp.json";
+  const launcher = path.join(ROOT, "bin", "agent-in-chrome.mjs");
+  const home = makeHome([
+    [cnRel, canonicalJson({ mcpServers: { keepme: { command: "keep" } } })],
+    [".workbuddy-ai/settings.json", "{}"],
+  ]);
+
+  const r = await quiet(() => runAgents("install", { ...opts(home), agents: ["workbuddy", "workbuddy-ai"] }));
+  const ai = JSON.parse(fs.readFileSync(path.join(home, aiRel), "utf8"));
+  const cn = JSON.parse(fs.readFileSync(path.join(home, cnRel), "utf8"));
+  check("国际版写进 ~/.workbuddy-ai/mcp.json", ai.mcpServers?.["agent-in-chrome"]?.command === launcher, JSON.stringify(ai));
+  check(
+    "国际版条目形状与国内版逐字相同（type/disabled 都带）",
+    JSON.stringify(ai.mcpServers?.["agent-in-chrome"]) ===
+      JSON.stringify({ type: "stdio", command: launcher, args: [], disabled: false }),
+    JSON.stringify(ai.mcpServers?.["agent-in-chrome"])
+  );
+  check(
+    "两家各写各的文件，国内版原有的键没被碰",
+    cn.mcpServers?.["agent-in-chrome"]?.command === launcher && cn.mcpServers?.keepme?.command === "keep",
+    JSON.stringify(cn)
+  );
+  check(
+    "两家都报装上了",
+    r.value.installed.includes("workbuddy") && r.value.installed.includes("workbuddy-ai"),
+    JSON.stringify(r.value)
+  );
+
+  const ids = (h) =>
+    buildAgents({ home: h, platform: "linux", serverPath: SERVER_PATH, mcpLauncher: launcher })
+      .filter((a) => a.detected)
+      .map((a) => a.id);
+  const cnOnly = ids(makeHome([[cnRel, "{}"]]));
+  const aiOnly = ids(makeHome([[aiRel, "{}"]]));
+  check("只有 ~/.workbuddy 时不认国际版", cnOnly.includes("workbuddy") && !cnOnly.includes("workbuddy-ai"), cnOnly.join(","));
+  check("只有 ~/.workbuddy-ai 时不认国内版", aiOnly.includes("workbuddy-ai") && !aiOnly.includes("workbuddy"), aiOnly.join(","));
+
+  await quiet(() => runAgents("uninstall", { ...opts(home), agents: ["workbuddy-ai"] }));
+  const aiAfter = JSON.parse(fs.readFileSync(path.join(home, aiRel), "utf8"));
+  const cnAfter = JSON.parse(fs.readFileSync(path.join(home, cnRel), "utf8"));
+  check("卸载摘掉国际版那条", aiAfter.mcpServers?.["agent-in-chrome"] === undefined, JSON.stringify(aiAfter));
+  check("卸载没碰国内版那条", cnAfter.mcpServers?.["agent-in-chrome"]?.command === launcher, JSON.stringify(cnAfter));
 }
 
 function diffHint(a, b) {

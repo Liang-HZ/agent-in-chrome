@@ -1352,9 +1352,9 @@ export const FLAGS_USAGE = `用法：node scripts/install.mjs [--check | --unins
   --uninstall      卸载：移除安装写入的一切（agent 配置只摘我们自己的键，改前有备份）
   --yes / -y       跳过逐个确认
   --agents=a,b     只注册这些 agent。可用 id 见 --check 的输出，当前是：
-                   claude-code、claude-desktop、workbuddy、zcode、opencode、kimi、
-                   gemini、antigravity、qoder-cli、qoder-cli-cn、qoder-ide-cn、
-                   trae-cn、qoder-ide、trae、deepseek-harness、codex
+                   claude-code、claude-desktop、workbuddy、workbuddy-ai、zcode、
+                   opencode、kimi、gemini、antigravity、qoder-cli、qoder-cli-cn、
+                   qoder-ide-cn、trae-cn、qoder-ide、trae、deepseek-harness、codex
   --no-agents      跳过 agent 注册
   --print-config[=json|toml|claude-cli]
                    只把安装事实（路径、启动方式、扩展目录、各 agent 状态）打到 stdout，

@@ -28,7 +28,7 @@ import {
 import { createUpdateNotice } from "./update-notice.mjs";
 import { foregroundGuard } from "./foreground-guard.mjs";
 import { deriveSessionId, pruneClaims } from "./session-id.mjs";
-import { probeLocal, readSessionIdentity, composeAgent, procSource, readClaudeSubagent, antigravityConversationId } from "./agent-identity.mjs";
+import { probeLocal, readSessionIdentity, composeAgent, procSource, readClaudeSubagent, antigravityConversationId, codexThreadId, workbuddyConversationId, isOpencodeClient } from "./agent-identity.mjs";
 import * as cfgFile from "./config.mjs";
 import { TOOL_TIER, TIER_RANK, REVEAL_REQUIRES_FULL, PARAM_REQUIRES_FULL } from "./tool-tiers.mjs";
 import {
@@ -50,7 +50,7 @@ import {
 import crypto from "node:crypto";
 
 const NAME = "agent-in-chrome";
-const VERSION = "0.55.1";
+const VERSION = "0.55.2";
 /** 本进程起来的时刻。CDP 模式下工具层就在本进程里，它也是「工具层代码的加载时刻」 */
 const PROCESS_STARTED_AT = Date.now();
 const SUPPORTED_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -427,10 +427,19 @@ let lastTitle = null;
 let LAST_META = null;
 let lastMetaKey = null;
 let LAST_TOOL_USE = null;
-function noteRpcMeta(m) {
+let LAST_CALL = null;
+function noteRpcMeta(m, tool) {
+  if (typeof tool === "string" && tool) LAST_CALL = { tool, at: Date.now() };
+  if (LAST_CALL && isOpencodeClient(LOCAL_ID?.clientCommand)) titleAt = 0;
   if (!m || typeof m !== "object") return;
   if (typeof m["claudecode/toolUseId"] === "string") LAST_TOOL_USE = m["claudecode/toolUseId"];
-  const ids = [m.session_id, m.chatSessionId, m["antigravity.google/conversation_id"]].map((v) => v || "");
+  const ids = [
+    m.session_id,
+    m.chatSessionId,
+    antigravityConversationId(m),
+    codexThreadId(m),
+    workbuddyConversationId(m),
+  ].map((v) => v || "");
   if (!ids.some(Boolean)) return;
   const key = ids.join("|");
   LAST_META = m;
@@ -448,7 +457,7 @@ function refreshAgentInfo({ force = false } = {}) {
   if (!force && AGENT_INFO && Date.now() - titleAt < ttl) return AGENT_INFO;
   titleAt = Date.now();
   try {
-    const idn = readSessionIdentity(LOCAL_ID, { meta: LAST_META });
+    const idn = readSessionIdentity(LOCAL_ID, { meta: LAST_META, tool: LAST_CALL?.tool, at: LAST_CALL?.at });
     if (idn.title) lastTitle = idn.title;
     if (idn.workspace) lastWs = { name: idn.workspace, kind: idn.workspaceKind };
   } catch {}
@@ -3101,7 +3110,7 @@ async function handle(msg) {
         }
       }
       const { sid, sidFrom, sidCaller } = sidFor(params?._meta);
-      noteRpcMeta(params?._meta);
+      noteRpcMeta(params?._meta, params?.name);
       const key = id === undefined || id === null ? null : String(id);
       const track = beginCall(key, params?.name, params?._meta);
       const ctx = { sid, sidFrom, sidCaller, rpcMeta: params?._meta, onBridgeCall: track.onBridgeCall };

@@ -511,6 +511,7 @@ export function buildAgents({ home = os.homedir(), platform = process.platform, 
         : path.join(home, ".config", "Claude", "claude_desktop_config.json");
   const workbuddyConfig = path.join(home, ".workbuddy", "mcp.json");
   const workbuddyLegacyConfig = path.join(home, ".workbuddy", ".mcp.json");
+  const workbuddyAiConfig = path.join(home, ".workbuddy-ai", "mcp.json");
   const zcodeConfig = path.join(home, ".zcode", "cli", "config.json");
   const opencodeConfig = path.join(home, ".config", "opencode", "opencode.json");
   const kimiConfig = path.join(home, ".kimi", "mcp.json");
@@ -671,6 +672,16 @@ export function buildAgents({ home = os.homedir(), platform = process.platform, 
         uninstallJsonEntry("WorkBuddy", workbuddyConfig);
         uninstallJsonEntry("WorkBuddy", workbuddyLegacyConfig);
       },
+    },
+    {
+      id: "workbuddy-ai",
+      name: "WorkBuddy AI",
+      detected: fs.existsSync(path.join(home, ".workbuddy-ai")),
+      target: workbuddyAiConfig,
+      preview: previewJson(workbuddyEntry),
+      install: () => installJsonEntry("WorkBuddy AI", workbuddyAiConfig, workbuddyEntry),
+      check: () => checkJsonEntry("WorkBuddy AI", workbuddyAiConfig, workbuddyEntry, guiCheck),
+      uninstall: () => uninstallJsonEntry("WorkBuddy AI", workbuddyAiConfig),
     },
     {
       id: "zcode",
