@@ -9,7 +9,7 @@
 // 所有 browser_* 工具的实现都在这个文件里（工具表见 TOOLS）。
 
 const HOST_NAME = "org.liangai.agent_in_chrome";
-const VERSION = "0.55.2";
+const VERSION = "0.55.3";
 /* 这个 service worker 实例是什么时候起来的（= 磁盘上的代码是什么时候读进来的），见 hello */
 const SW_BOOTED_AT = Date.now();
 /* agent 开的标签页统一收进这一组，跟用户自己的标签页视觉隔离 */
@@ -2978,26 +2978,44 @@ async function wakeTab(tabId) {
  * 探针（inPage）走的都是单帧默认注入——不一起防住，卡点只是往后挪了一步。
  */
 async function injectStaged(opts) {
-  const idle = chrome.scripting.executeScript(opts);
-  const PENDING = {};
-  let timer;
-  const first = await Promise.race([
-    idle,
-    new Promise((r) => {
-      timer = setTimeout(() => r(PENDING), IDLE_INJECT_MS);
-    }),
-  ]).finally(() => clearTimeout(timer));
-  if (first !== PENDING) return { res: first, degraded: false };
-  Promise.resolve(idle).catch(() => {});
-  await wakeTab(opts.target?.tabId);
-  const res = await deadline(
-    chrome.scripting.executeScript({ ...opts, injectImmediately: true }),
-    IMMEDIATE_INJECT_MS,
-    `页面注入 ${IDLE_INJECT_MS + IMMEDIATE_INJECT_MS}ms 没有回执（等帧就绪、立即注入两条路都试过了）：` +
-      `这张标签页的注入路卡死了，重试大概率还是它。用 browser_new_tab 开一张新的、地址照旧，在新页上重来；` +
-      `这张页也没全废——browser_eval 走 CDP，仍然读得到东西。`
-  );
-  return { res, degraded: true };
+  const tabId = opts.target?.tabId;
+  let wakePending = null;
+  const pulseWake = () => {
+    if (tabId == null) return Promise.resolve();
+    if (!wakePending) {
+      wakePending = wakeTab(tabId)
+        .catch(() => {})
+        .finally(() => {
+          wakePending = null;
+        });
+    }
+    return wakePending;
+  };
+  const heartbeat = tabId == null ? null : setInterval(() => void pulseWake(), EVAL_WAKE_MS);
+  try {
+    const idle = chrome.scripting.executeScript(opts);
+    const PENDING = {};
+    let timer;
+    const first = await Promise.race([
+      idle,
+      new Promise((r) => {
+        timer = setTimeout(() => r(PENDING), IDLE_INJECT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (first !== PENDING) return { res: first, degraded: false };
+    Promise.resolve(idle).catch(() => {});
+    await pulseWake();
+    const res = await deadline(
+      chrome.scripting.executeScript({ ...opts, injectImmediately: true }),
+      IMMEDIATE_INJECT_MS,
+      `页面注入 ${IDLE_INJECT_MS + IMMEDIATE_INJECT_MS}ms 没有回执（等帧就绪、立即注入两条路都试过了）：` +
+        `这张标签页的注入路卡死了，重试大概率还是它。用 browser_new_tab 开一张新的、地址照旧，在新页上重来；` +
+        `这张页也没全废——browser_eval 走 CDP，仍然读得到东西。`
+    );
+    return { res, degraded: true };
+  } finally {
+    if (heartbeat !== null) clearInterval(heartbeat);
+  }
 }
 
 /*
