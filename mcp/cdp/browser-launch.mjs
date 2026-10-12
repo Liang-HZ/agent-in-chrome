@@ -126,7 +126,11 @@ function firstExisting(cands) {
 
 /*
  * 找浏览器。优先级就是「越像用户日常那台越好」：
- * 正式版 Chrome → Beta/Canary → Chromium / Chrome for Testing（指纹会差，最后才用）。
+ * 正式版 Chrome → Beta/Canary → Chromium / Edge（指纹会差，最后才用）。
+ *
+ * Windows 的候选按安装范围排：系统级（Program Files）→ 32 位系统级（Program Files
+ * (x86)，Chrome 38 起的官方默认位置）→ 每用户（%LocalAppData%）。Beta/Canary/Dev 各有
+ * 自己的目录名（Chrome Beta / Chrome SxS / Chrome Dev），Canary 只发每用户安装。
  */
 export function findBrowser() {
   const explicit = process.env.AGENT_IN_CHROME_BIN;
@@ -136,6 +140,10 @@ export function findBrowser() {
   }
 
   const mac = process.platform === "darwin";
+  const win = process.platform === "win32";
+  const PF = process.env.ProgramFiles || "C:\\Program Files";
+  const PF86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const LAD = process.env.LocalAppData || path.join(HOME, "AppData", "Local");
   const stableCands = mac
     ? [
         ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "正式版 Chrome"],
@@ -143,11 +151,21 @@ export function findBrowser() {
         ["/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta", "Chrome Beta"],
         ["/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary", "Chrome Canary"],
       ]
-    : [
-        ["/usr/bin/google-chrome", "正式版 Chrome"],
-        ["/usr/bin/google-chrome-stable", "正式版 Chrome"],
-        ["/opt/google/chrome/chrome", "正式版 Chrome"],
-      ];
+    : win
+      ? [
+          [path.join(PF, "Google", "Chrome", "Application", "chrome.exe"), "正式版 Chrome"],
+          [path.join(PF86, "Google", "Chrome", "Application", "chrome.exe"), "正式版 Chrome"],
+          [path.join(LAD, "Google", "Chrome", "Application", "chrome.exe"), "正式版 Chrome"],
+          [path.join(PF, "Google", "Chrome Beta", "Application", "chrome.exe"), "Chrome Beta"],
+          [path.join(PF86, "Google", "Chrome Beta", "Application", "chrome.exe"), "Chrome Beta"],
+          [path.join(LAD, "Google", "Chrome Beta", "Application", "chrome.exe"), "Chrome Beta"],
+          [path.join(LAD, "Google", "Chrome SxS", "Application", "chrome.exe"), "Chrome Canary"],
+        ]
+      : [
+          ["/usr/bin/google-chrome", "正式版 Chrome"],
+          ["/usr/bin/google-chrome-stable", "正式版 Chrome"],
+          ["/opt/google/chrome/chrome", "正式版 Chrome"],
+        ];
   for (const [bin, kind] of stableCands) if (fs.existsSync(bin)) return { bin, kind, stable: true };
 
   const fallback = mac
@@ -158,22 +176,49 @@ export function findBrowser() {
           "Chrome for Testing",
         ],
       ]
-    : [
-        ["/usr/bin/chromium", "Chromium"],
-        ["/usr/bin/chromium-browser", "Chromium"],
-      ];
+    : win
+      ? [
+          [path.join(LAD, "Chromium", "Application", "chrome.exe"), "Chromium"],
+          [path.join(PF, "Chromium", "Application", "chrome.exe"), "Chromium"],
+          [path.join(PF86, "Microsoft", "Edge", "Application", "msedge.exe"), "Microsoft Edge"],
+          [path.join(PF, "Microsoft", "Edge", "Application", "msedge.exe"), "Microsoft Edge"],
+          [path.join(LAD, "Microsoft", "Edge", "Application", "msedge.exe"), "Microsoft Edge"],
+        ]
+      : [
+          ["/usr/bin/chromium", "Chromium"],
+          ["/usr/bin/chromium-browser", "Chromium"],
+        ];
   for (const [bin, kind] of fallback) if (fs.existsSync(bin)) return { bin, kind, stable: false };
 
   throw new Error(
     "找不到浏览器。CLI/headless 模式要用本机的 Chrome（指纹就该是它本来的样子）：\n" +
       (mac
         ? "  macOS：装 Google Chrome 到 /Applications 即可\n"
-        : "  Linux：apt install google-chrome-stable，或用 AGENT_IN_CHROME_BIN 指路径\n") +
+        : win
+          ? "  Windows：装 Google Chrome（默认装到 Program Files 即可），或用 AGENT_IN_CHROME_BIN 指路径\n"
+          : "  Linux：apt install google-chrome-stable，或用 AGENT_IN_CHROME_BIN 指路径\n") +
       "也可以用 AGENT_IN_CHROME_BIN 指定任意 Chromium 系二进制。"
   );
 }
 
 const versionCache = new Map();
+function winMajorFromSiblingDir(bin) {
+  try {
+    const dirs = fs
+      .readdirSync(path.dirname(bin), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && /^\d+\.\d+\.\d+\.\d+$/.test(d.name))
+      .map((d) => d.name)
+      .sort((a, b) => {
+        const pa = a.split(".").map(Number);
+        const pb = b.split(".").map(Number);
+        for (let i = 0; i < 4; i++) if (pa[i] !== pb[i]) return pb[i] - pa[i];
+        return 0;
+      });
+    return (dirs[0] || "").split(".")[0] || "";
+  } catch {
+    return "";
+  }
+}
 function browserMajorVersion(bin) {
   let key = bin;
   try {
@@ -181,10 +226,14 @@ function browserMajorVersion(bin) {
   } catch {}
   if (versionCache.has(key)) return versionCache.get(key);
   let major = "";
-  try {
-    const out = execFileSync(bin, ["--version"], { encoding: "utf8" });
-    major = (out.match(/(\d+)\.\d+\.\d+\.\d+/) || [])[1] || "";
-  } catch {}
+  if (process.platform === "win32") {
+    major = winMajorFromSiblingDir(bin);
+  } else {
+    try {
+      const out = execFileSync(bin, ["--version"], { encoding: "utf8" });
+      major = (out.match(/(\d+)\.\d+\.\d+\.\d+/) || [])[1] || "";
+    } catch {}
+  }
   versionCache.set(key, major);
   return major;
 }
@@ -207,18 +256,14 @@ function headedUserAgent(bin) {
  */
 export const OWNER_FLAG = "--aic-owner";
 
-/*
- * 从浏览器进程的命令行里读出它的 `--user-data-dir`，读不到给 null。
- *
- * 值一直取到下一个 ` --` 开头的旗标为止：路径里带空格（macOS 的
- * `Application Support` 之流）不能把它截成半截。我们自己 spawn 的命令行里
- * user-data-dir 后面永远还有别的旗标（--remote-debugging-port 紧跟其后），
- * 所以这个边界总是存在。
- */
 export function profileDirFrom(cmd) {
   const m = /--user-data-dir=(.+?)(?=\s--|$)/.exec(String(cmd || ""));
-  return m ? m[1] : null;
+  return m ? m[1].replace(/^"|"$/g, "") : null;
 }
+
+/* 目录等：Windows 的路径不分大小写（agent-identity 同款判据），POSIX 按字面 */
+const dirEq = (a, b) =>
+  process.platform === "win32" ? String(a).toLowerCase() === String(b).toLowerCase() : a === b;
 
 /*
  * 从进程列表里挑出「我们起的、而且**没人要了**」的浏览器，返回它们的 pid。
@@ -245,7 +290,7 @@ export function orphansFrom(procs, isAlive, { readRecord = null, excludeProfile 
     if (!Number.isInteger(owner) || owner <= 0) continue;
     if (isAlive(owner)) continue;
     const profile = profileDirFrom(cmd);
-    if (excludeProfile && profile === excludeProfile) continue;
+    if (excludeProfile && profile && dirEq(profile, excludeProfile)) continue;
     if (readRecord && profile) {
       const rec = readRecord(profile);
       if (rec && Number(rec.pid) === Number(p.pid)) {
@@ -260,6 +305,36 @@ export function orphansFrom(procs, isAlive, { readRecord = null, excludeProfile 
 
 /* 本机进程快照，只取 pid + 完整命令行 */
 export function psSnapshot() {
+  if (process.platform === "win32") {
+    const tmp = path.join(os.tmpdir(), `aic-ps-${process.pid}-${Math.random().toString(36).slice(2)}.txt`);
+    const ps = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const script =
+      `$ProgressPreference = 'SilentlyContinue'\n` +
+      `Get-CimInstance Win32_Process -Property ProcessId,CommandLine | ForEach-Object {\n` +
+      `  if ($_.CommandLine) { $_.ProcessId.ToString() + "\`t" + ($_.CommandLine -replace "[\`r\`n]", " ") }\n` +
+      `} | Out-File -FilePath ${JSON.stringify(tmp)} -Encoding utf8`;
+    try {
+      execFileSync(ps, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: 30_000,
+        windowsHide: true,
+      });
+      return fs
+        .readFileSync(tmp, "utf8")
+        .replace(/^﻿/, "")
+        .split("\n")
+        .map((l) => /^(\d+)\t(.*)$/.exec(l.trim()))
+        .filter(Boolean)
+        .map((m) => ({ pid: Number(m[1]), cmd: m[2] }));
+    } catch (e) {
+      log(`Windows 进程表取不到（${String(e?.message || e).split("\n")[0].slice(0, 120)}）：` + "孤儿清扫和认领这一拍看不到别的进程");
+      return [];
+    } finally {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {}
+    }
+  }
   try {
     const out = execFileSync("/bin/ps", ["-eo", "pid=,command="], { encoding: "utf8", maxBuffer: 8 << 20 });
     return out
@@ -376,6 +451,7 @@ export async function sweepOrphansAsync({
 }
 
 function canGroupKill(pid, procs) {
+  if (process.platform === "win32") return false;
   const cmd = (procs || []).find((p) => Number(p?.pid) === Number(pid))?.cmd;
   const profile = cmd ? profileDirFrom(String(cmd)) : null;
   if (!profile) return true;
@@ -596,14 +672,6 @@ function clearPid() {
   dropLegacyIfOurs();
 }
 
-/*
- * 这个 pid 此刻是不是一个正跑着**本 profile** 的浏览器。
- *
- * 两道都必要：pid 会被系统复用（`kill(pid,0)` 只说明「有个进程」，不说明是哪个），
- * 而认 `--user-data-dir=<本 profile>` 才说明是「跑我们这个 profile 的」。
- * 这是所有「要不要把信号发给它」的最后一道闸——别的 profile 的浏览器命令行里写的是
- * 别的目录，过不了这一道，所以一份写错/别人的记录也带不动我们去杀它。
- */
 function pidRunsThisProfile(pid, procs = null) {
   if (!pid) return false;
   try {
@@ -611,16 +679,42 @@ function pidRunsThisProfile(pid, procs = null) {
   } catch {
     return false;
   }
+  const mine = (cmd) => {
+    const dir = profileDirFrom(cmd);
+    return !!dir && dirEq(dir, PROFILE_DIR);
+  };
   if (procs) {
     const hit = procs.find((x) => x.pid === Number(pid));
-    return !!hit && hit.cmd.includes(`--user-data-dir=${PROFILE_DIR}`);
+    return !!hit && mine(hit.cmd);
+  }
+  if (process.platform === "win32") {
+    const cmd = winProcCmd(pid);
+    return cmd != null && mine(cmd);
   }
   try {
     const cmd = execFileSync("/bin/ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
-    return cmd.includes(`--user-data-dir=${PROFILE_DIR}`);
+    return mine(cmd);
   } catch {
     return false;
   }
+}
+
+function winProcCmd(pid) {
+  const ps = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const script =
+    `$ErrorActionPreference='SilentlyContinue';` +
+    `$c=(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine;` +
+    `ConvertTo-Json -Compress -InputObject @($c)`;
+  const out = execFileSync(ps, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+    encoding: "utf8",
+    timeout: 8000,
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const rows = JSON.parse(String(out || "[]").trim() || "[]");
+  const cmd = Array.isArray(rows) ? rows[0] : rows;
+  return typeof cmd === "string" && cmd ? cmd : null;
 }
 
 /*
@@ -643,13 +737,29 @@ export function aliveBrowser() {
 
 /*
  * 谁正占着这个 profile（返回它的 pid，没人占返回 null）。
- * **Chrome 自己按 profile 记的，不是我们记的**：读 `<profile>/SingletonLock` 这个
- * 指向「主机名-pid」的符号链接。Chrome 一个 `--user-data-dir` 只准一个实例，
- * 第二个起来会输掉 ProcessSingleton 当场自杀。
+ * **macOS/Linux 上 Chrome 自己按 profile 记的，不是我们记的**：读
+ * `<profile>/SingletonLock` 这个指向「主机名-pid」的符号链接。Chrome 一个
+ * `--user-data-dir` 只准一个实例，第二个起来会输掉 ProcessSingleton 当场自杀。
  * 这里只探活，**不核对是不是我们起的**——它要回答的是「被谁占着」，答案得包括
  * 用户自己开的那种。拿它当发信号的目标时，核对由调用方补。
+ *
+ * Windows 上没有这个符号链接：Chrome 的 ProcessSingleton 在那边是一个命名 mutex +
+ * 隐藏窗口，pid 从外面查不出来（process_singleton_win.cc）。改从进程表认：谁的
+ * 命令行里带着 `--user-data-dir=<本 profile>`，谁就是占用者；优先挑没有 `--type=`
+ * 的——Chrome 的子进程（renderer/gpu/crashpad）命令行里同样带着这个旗标，只有
+ * 主进程没有。快照由调用方传（ensureBrowser 本来就拉了一拍）或现拉一拍。
  */
-function profileOwnerPid() {
+function profileOwnerPid(procs = null) {
+  if (process.platform === "win32") {
+    const snap = procs || psSnapshot();
+    const hits = snap
+      .filter((p) => {
+        const dir = profileDirFrom(p.cmd);
+        return dir && dirEq(dir, PROFILE_DIR) && pidAlive(p.pid);
+      })
+      .sort((a, b) => Number(/(^|\s)--type=/.test(a.cmd)) - Number(/(^|\s)--type=/.test(b.cmd)));
+    return hits[0]?.pid ?? null;
+  }
   let target = null;
   try {
     target = fs.readlinkSync(path.join(PROFILE_DIR, "SingletonLock"));
@@ -675,7 +785,7 @@ function profileOwnerPid() {
  * 本人用 GUID 确认身份。**于是「认领到别的 profile 的浏览器」从结构上不成立**。
  */
 async function adoptRunning({ headless, procs = null }) {
-  const owner = profileOwnerPid();
+  const owner = profileOwnerPid(procs);
   const ep0 = readEndpoint();
   if (!owner && !ep0) return null;
 
@@ -809,8 +919,8 @@ export async function ensureBrowser({ headless = HEADLESS } = {}) {
       );
     }
     try {
-      const holder = profileOwnerPid();
-      if (holder && pidRunsThisProfile(holder))
+      const holder = profileOwnerPid(procs0);
+      if (holder && pidRunsThisProfile(holder, procs0))
         throw new Error(
           `这个 profile 已经被另一个浏览器实例占着（pid=${holder}）：${PROFILE_DIR}\n` +
             `而当前是管道传输，它的 CDP 只有起它的那个进程用得上——认领不了，也不能另起一个\n` +
@@ -942,15 +1052,17 @@ async function coldStart({ headless }) {
   rotateIfBig(BROWSER_LOG);
   const out = fs.openSync(BROWSER_LOG, "a");
   const child = USE_PIPE
-    ? spawn(bin, browserArgs({ headless, bin }), { stdio: ["ignore", out, out, "pipe", "pipe"] })
-    : spawn(bin, browserArgs({ headless, bin }), { stdio: ["ignore", out, out], detached: true });
+    ? spawn(bin, browserArgs({ headless, bin }), { stdio: ["ignore", out, out, "pipe", "pipe"], windowsHide: true })
+    : spawn(bin, browserArgs({ headless, bin }), { stdio: ["ignore", out, out], detached: true, windowsHide: true });
   if (!USE_PIPE) child.unref();
   try {
     fs.closeSync(out);
   } catch {}
 
   const ep = USE_PIPE ? await pipeEndpoint(child) : await waitForEndpoint();
-  if (!pidRunsThisProfile(child.pid)) {
+  const childRuns =
+    process.platform === "win32" ? child.exitCode === null && child.signalCode === null : pidRunsThisProfile(child.pid);
+  if (!childRuns) {
     log(`冷启动的孩子 pid=${child.pid} 已不在（输掉了 ProcessSingleton），转认领真正的占用者`);
     const winner = await adoptRunning({ headless });
     if (winner) return winner;
@@ -1012,7 +1124,7 @@ export function stopBrowser({ force = false } = {}) {
     log(`不收浏览器 pid=${rec.pid}：它归 pid=${mgr} 管，那个进程还活着`);
     return false;
   }
-  const groupKill = rec.transport !== "pipe";
+  const groupKill = process.platform !== "win32" && rec.transport !== "pipe";
   try {
     if (groupKill) process.kill(-rec.pid, "SIGTERM");
     else process.kill(rec.pid, "SIGTERM");
@@ -1085,7 +1197,7 @@ export async function stopBrowserGracefully({ timeoutMs = 10_000, force = true }
   if (stillAlive) {
     log(`pid=${pid} 没理 SIGTERM，升级到 SIGKILL`);
     try {
-      if (rec.transport !== "pipe") process.kill(-pid, "SIGKILL");
+      if (process.platform !== "win32" && rec.transport !== "pipe") process.kill(-pid, "SIGKILL");
       else process.kill(pid, "SIGKILL");
     } catch {
       try {

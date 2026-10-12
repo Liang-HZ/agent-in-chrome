@@ -944,6 +944,10 @@ console.log("\n\x1b[1mC. 启动器（最小 PATH）\x1b[0m");
 let runtimeHome = os.homedir();
 let RUNTIME_DIR = path.join(runtimeHome, ".agent-in-chrome", "agent-in-chrome");
 let installedForThisRun = null;
+if (process.platform === "win32") {
+  skipSection("C/D 的启动器握手是 POSIX 机制（.sh + /usr/bin:/bin），Windows 的 .bat 启动器由安装器一节自己的段覆盖");
+} else {
+
 if (!fs.existsSync(path.join(RUNTIME_DIR, "native-host-launcher.sh"))) {
   const SOCK_SUFFIX = "/.agent-in-chrome/agent-in-chrome.sock".length;
   let base = os.tmpdir();
@@ -1070,6 +1074,7 @@ const MCP_LAUNCHER = path.join(RUNTIME_DIR, "mcp-launcher.sh");
     check("启动器装在 ~/.agent-in-chrome 而非 ~/Documents（避开 TCC）", !MCP_LAUNCHER.includes("/Documents/"));
     mp.kill();
   }
+}
 }
 
 console.log("\n\x1b[1mE. 多会话并发\x1b[0m");
@@ -1611,10 +1616,10 @@ console.log("\n\x1b[1mF3. 会话名按 params._meta 精确归属\x1b[0m");
 }
 
 console.log("\n\x1b[1mG. CLI 浏览器记录按 profile 隔离\x1b[0m");
-if (process.platform === "win32") {
-  skipSection("CLI/headless 模式的进程记账走 /bin/sh 冒充 + /bin/ps 取证，Windows 上 CLI 模式尚未支持（插件模式不受影响）");
-} else {
+{
+  const G_WIN = process.platform === "win32";
   const G_HOME = path.join(TMP, "g-home");
+  const homeEnv = G_WIN ? { HOME: G_HOME, USERPROFILE: G_HOME } : { HOME: G_HOME };
   const PROF_A = path.join(TMP, "g-prof-a");
   const PROF_B = path.join(TMP, "g-prof-b");
   for (const d of [G_HOME, PROF_A, PROF_B]) fs.mkdirSync(d, { recursive: true });
@@ -1626,14 +1631,14 @@ if (process.platform === "win32") {
         process.execPath,
         ["-e", `import(${JSON.stringify(LAUNCH_MOD)}).then((m) => console.log(JSON.stringify(m.browserStatus())))`],
         {
-          env: { ...process.env, HOME: G_HOME, ...(profileDir ? { AGENT_IN_CHROME_PROFILE: profileDir } : {}) },
+          env: { ...process.env, ...homeEnv, ...(profileDir ? { AGENT_IN_CHROME_PROFILE: profileDir } : {}) },
           encoding: "utf8",
         }
       ).trim()
     );
   const stopUnder = (profileDir) =>
     execFileSync(process.execPath, [path.join(ROOT, "scripts", "cli-browser.mjs"), "--stop"], {
-      env: { ...process.env, HOME: G_HOME, AGENT_IN_CHROME_PROFILE: profileDir },
+      env: { ...process.env, ...homeEnv, AGENT_IN_CHROME_PROFILE: profileDir },
       encoding: "utf8",
     });
 
@@ -1653,10 +1658,14 @@ if (process.platform === "win32") {
   );
   check("干净 profile 一开始什么都没有", stA.running === false && stA.stale === false, JSON.stringify(stA));
 
-  const impostor = spawn("/bin/sh", ["-c", "while :; do sleep 1; done", `--user-data-dir=${PROF_B}`], {
-    stdio: "ignore",
-    detached: true,
-  });
+  const G_STUB = path.join(G_HOME, "impostor-stub.mjs");
+  fs.writeFileSync(G_STUB, "setTimeout(() => {}, 300000);\n");
+  const impostor = G_WIN
+    ? spawn(process.execPath, [G_STUB, `--user-data-dir=${PROF_B}`], { stdio: "ignore", detached: true, windowsHide: true })
+    : spawn("/bin/sh", ["-c", "while :; do sleep 1; done", `--user-data-dir=${PROF_B}`], {
+        stdio: "ignore",
+        detached: true,
+      });
   let impostorExited = false;
   impostor.on("exit", () => (impostorExited = true));
   await sleep(300);
@@ -1692,20 +1701,21 @@ if (process.platform === "win32") {
 
   if (!impostorExited) {
     try {
-      process.kill(-impostor.pid, "SIGKILL");
+      if (G_WIN) process.kill(impostor.pid, "SIGKILL");
+      else process.kill(-impostor.pid, "SIGKILL");
     } catch {}
   }
 }
 
 console.log("\n\x1b[1mH. 认领在跑的浏览器：端点必须自证身份\x1b[0m");
-if (process.platform === "win32") {
-  skipSection("CLI/headless 模式的认领流程走 /bin/sh 冒充进程，Windows 上 CLI 模式尚未支持（插件模式不受影响）");
-} else {
+{
+  const H_WIN = process.platform === "win32";
   const H_HOME = path.join(TMP, "h-home");
+  const homeEnv = H_WIN ? { HOME: H_HOME, USERPROFILE: H_HOME } : { HOME: H_HOME };
   const PROF_C = path.join(TMP, "h-prof-c");
   for (const d of [H_HOME, PROF_C]) fs.mkdirSync(d, { recursive: true });
   const LAUNCH_MOD = pathToFileURL(path.join(ROOT, "mcp", "cdp", "browser-launch.mjs")).href;
-  const NO_CHROME = path.join(TMP, "no-such-chrome");
+  const NO_CHROME = H_WIN ? path.join(TMP, "no-such-chrome.exe") : path.join(TMP, "no-such-chrome");
 
   const MINE = "/devtools/browser/11111111-1111-4111-8111-111111111111";
   const OTHERS = "/devtools/browser/22222222-2222-4222-8222-222222222222";
@@ -1739,7 +1749,7 @@ if (process.platform === "win32") {
         {
           env: {
             ...process.env,
-            HOME: H_HOME,
+            ...homeEnv,
             AGENT_IN_CHROME_PROFILE: PROF_C,
             AGENT_IN_CHROME_BIN: NO_CHROME,
             AGENT_IN_CHROME_CDP_TRANSPORT: "port",
@@ -1763,14 +1773,18 @@ if (process.platform === "win32") {
   const stale = await ensure();
   check("没人占着 profile 时，旧端口文件当冷启动处理", stale.ok === false && stale.err.includes(NO_CHROME), stale.err);
 
-  const holder = spawn("/bin/sh", ["-c", "while :; do sleep 1; done", `--user-data-dir=${PROF_C}`], {
-    stdio: "ignore",
-    detached: true,
-  });
+  const H_STUB = path.join(H_HOME, "holder-stub.mjs");
+  fs.writeFileSync(H_STUB, "setTimeout(() => {}, 300000);\n");
+  const holder = H_WIN
+    ? spawn(process.execPath, [H_STUB, `--user-data-dir=${PROF_C}`], { stdio: "ignore", detached: true, windowsHide: true })
+    : spawn("/bin/sh", ["-c", "while :; do sleep 1; done", `--user-data-dir=${PROF_C}`], {
+        stdio: "ignore",
+        detached: true,
+      });
   let holderExited = false;
   holder.on("exit", () => (holderExited = true));
-  await sleep(300);
-  fs.symlinkSync(`${os.hostname()}-${holder.pid}`, path.join(PROF_C, "SingletonLock"));
+  await sleep(H_WIN ? 500 : 300);
+  if (!H_WIN) fs.symlinkSync(`${os.hostname()}-${holder.pid}`, path.join(PROF_C, "SingletonLock"));
 
   servedPath = OTHERS;
   const wrong = await ensure();
@@ -1781,12 +1795,17 @@ if (process.platform === "win32") {
   servedPath = MINE;
   const right = await ensure();
   check("GUID 对得上就认领（复用，不重开）", right.ok === true && right.adopted === true, JSON.stringify(right).slice(0, 240));
-  check("认领到的 pid 取自 Chrome 自己那把锁", right.ok === true && right.pid === holder.pid, JSON.stringify(right.pid));
+  check(
+    "认领到的 pid 取自 Chrome 自己的占用凭证（POSIX 是 SingletonLock，Windows 是进程表）",
+    right.ok === true && right.pid === holder.pid,
+    JSON.stringify(right.pid)
+  );
   check("认领时把版本号一并问出来了", right.ok === true && String(right.version).startsWith("Chrome/"), right.version);
 
   fake.close();
   try {
-    process.kill(-holder.pid, "SIGKILL");
+    if (H_WIN) process.kill(holder.pid, "SIGKILL");
+    else process.kill(-holder.pid, "SIGKILL");
   } catch {}
   await waitFor(() => holderExited, 3000);
 }
@@ -2662,7 +2681,11 @@ if (process.platform === "win32") {
     }, 15000);
 
     const u = runInstaller(["--uninstall", "--agents=kimi"]);
-    check("Windows: 卸载不以一段堆栈收场（退出码 0）", u.status === 0, u.out.slice(-500));
+    check(
+      "Windows: 卸载不以一段堆栈收场（有残留也把每一步跑完，退出码如实非零）",
+      [0, 1].includes(u.status) && !/^\s+at /m.test(u.out),
+      `status=${u.status} ${u.out.slice(-500)}`
+    );
     if (!locked) skipSection("这台机器上没能把文件锁住，「一步失败不阻断其余步骤」这条对照略过");
     else {
       check("Windows: 一步失败之后，后面的步骤照样跑完 — 注册表键被删掉", !regHas(KEY), u.out.slice(-800));
@@ -3287,8 +3310,16 @@ console.log("\n\x1b[1mM. 孤儿浏览器回收\x1b[0m");
     const sent = [];
     await sweepOrphansAsync({ procs, kill: (pid, sig) => sent.push(`${pid}:${sig}`), isAlive: () => false, sleep: async () => {} });
     check("账上是管道的：只打主进程，绝不打进程组（-pid 会误伤别人）", sent.includes("7001:SIGTERM") && !sent.includes("-7001:SIGTERM"), sent.join(" "));
-    check("账上是端口的：照旧整组打（detached，pid 就是组长）", sent.includes("-7002:SIGTERM"), sent.join(" "));
-    check("没账的保持老行为（整组打）", sent.includes("-7003:SIGTERM"), sent.join(" "));
+    if (process.platform === "win32") {
+      check(
+        "Windows：端口/无账的也只打主进程（没有进程组可打）",
+        sent.includes("7002:SIGTERM") && sent.includes("7003:SIGTERM") && !sent.some((s) => s.startsWith("-")),
+        sent.join(" ")
+      );
+    } else {
+      check("账上是端口的：照旧整组打（detached，pid 就是组长）", sent.includes("-7002:SIGTERM"), sent.join(" "));
+      check("没账的保持老行为（整组打）", sent.includes("-7003:SIGTERM"), sent.join(" "));
+    }
   }
 
   const alive = (pid) => pid === 1000;
@@ -3389,9 +3420,7 @@ console.log("\n\x1b[1mM. 孤儿浏览器回收\x1b[0m");
     })());
   }
 
-  if (process.platform === "win32") {
-    skipSection("真实起浏览器/收孤儿的链路属于 CLI 模式，Windows 上尚未支持（上面的纯函数判定已全部验过）");
-  } else {
+  {
   const M_PROFILE = path.join(TMP, "m-profile");
   const holder = spawn(
     process.execPath,
@@ -3433,6 +3462,9 @@ console.log("\n\x1b[1mM. 孤儿浏览器回收\x1b[0m");
     check("没有杀不掉的", swept.stubborn.length === 0, JSON.stringify(swept.stubborn));
   }
 
+  if (process.platform === "win32") {
+    skipSection("Windows 的 kill 是 TerminateProcess 一刀，「不理 SIGTERM」的进程不存在，先礼后兵的升级阶梯无从测起");
+  } else {
   {
     const { sweepOrphans, psSnapshot, pidAlive, readProfileRecord } = await import(
       pathToFileURL(path.join(ROOT, "mcp", "cdp", "browser-launch.mjs")).href
@@ -3479,6 +3511,7 @@ console.log("\n\x1b[1mM. 孤儿浏览器回收\x1b[0m");
     check("没有被误报成杀不掉", !swept2.stubborn.includes(stubPid), JSON.stringify(swept2.stubborn));
 
     if (isUp(stubPid)) { try { process.kill(-stubPid, "SIGKILL"); } catch {} }
+  }
   }
 
   {
@@ -3685,6 +3718,9 @@ console.log("\n\x1b[1mN. 会话身份跨进程重启存活\x1b[0m");
     check("自己这条 SOCK 不碰", fs.existsSync(mine));
     check("不带 profile hash 的那条不归它管", fs.existsSync(other));
 
+    if (process.platform === "win32") {
+      skipSection("probeSock 的真 socket 探活是 POSIX 机制（Windows 桥接走命名管道，不落盘无残留）");
+    } else {
     const liveDir = fs.mkdtempSync(path.join(os.tmpdir(), "aic-sk-"));
     fs.chmodSync(liveDir, 0o700);
     const livePath = path.join(liveDir, "agent-in-chrome-cli-eeeeeeee.sock");
@@ -3700,6 +3736,7 @@ console.log("\n\x1b[1mN. 会话身份跨进程重启存活\x1b[0m");
     check("真探活：还在 listen 的一个字不碰", fs.existsSync(livePath));
     await new Promise((r) => srv.close(r));
     fs.rmSync(liveDir, { recursive: true, force: true });
+    }
   }
 
   const psTok = (out) => parentStartToken(123, () => out, { platform: "darwin" });

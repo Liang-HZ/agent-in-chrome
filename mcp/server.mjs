@@ -66,27 +66,8 @@ const TOOLS_TTL_MS = 60_000;
 const DISCOVER_TTL_MS = 600_000;
 
 /*
- * Windows 上不许进 CLI/headless 模式，当场拒绝启动。
+ * Windows 的 CLI/headless 模式（现已支持）。
  */
-if (CDP_LAUNCH && process.platform === "win32") {
-  process.stderr.write(
-    [
-      "[agent-in-chrome] Windows 上还不支持 CLI/headless 模式（AGENT_IN_CHROME_LAUNCH=1），已拒绝启动。",
-      "",
-      "为什么不支持：这个模式要自己起浏览器、也要自己收回来，而「收回来」依赖的三个数据源",
-      "  （ps 找子进程、按 profile 认领、SingletonLock 符号链接）在 Windows 上全部失效。",
-      "  实测结果是 server 退出后留下一堆 chrome.exe，它们的调试端口没有任何访问控制、仍在应答，",
-      "  任何本机进程都能接管那个带着你登录态的浏览器。所以宁可不启动。",
-      "  设 AGENT_IN_CHROME_BIN 也绕不过去 —— 它绕过的只是「找不到浏览器」，不是这条。",
-      "",
-      "插件模式不受影响：去掉 AGENT_IN_CHROME_LAUNCH（和 AGENT_IN_CHROME_BIN）重启即可，",
-      "  它驱动的是你自己那个装了扩展的 Chrome。装没装好用 npx @liang-hz/agent-in-chrome check 自检。",
-      "",
-      "跟进：README 的「平台」一节，以及 mcp/cdp/browser-launch.mjs 里的进程管理注释。",
-    ].join("\n") + "\n"
-  );
-  process.exit(1);
-}
 
 function defaultSockName() {
   if (!CDP_LAUNCH) return "agent-in-chrome.sock";

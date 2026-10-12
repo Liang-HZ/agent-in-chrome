@@ -42,7 +42,7 @@ Agent in Chrome 把 AI agent（Claude Code、Claude Desktop、Trae、Codex……
 | 模态浮层检出（含无 ARIA 角色的登录墙） | ✅ | ❌ | ❌ | ❌¹¹ | ❌¹¹ |
 | 元素像素坐标 + 跨源帧顶层坐标 | ✅ | ❌ | ❌ | ❌¹¹ | ❌¹¹ |
 
-<sup>1</sup> 仅 `--extension` 模式（Chrome/Edge，需装其扩展）；默认模式是独立 profile。 <sup>2</sup> 仅 `--autoConnect`（Chrome 144+，需在 `chrome://inspect` 手动开闸，该 profile 全部窗口暴露）。 <sup>3</sup> 二选一：CDP 直连已开调试端口的 Chrome，或用自带浏览器（独立 profile，不带用户登录态）。 <sup>4</sup> 独立 Chromium 分叉浏览器；登录态靠导入而非实时借用——`ego-browser import` 可从 Chrome/Edge/Brave 重复导入（扩展一并迁入）。 <sup>5</sup> Windows 已支持插件模式（CLI/headless 模式规划中）；Linux 路径已写未验证。 <sup>6</sup> Playwright 的 `--secrets` 与 DevTools 的 `--redactNetworkHeaders` 均为可选开关且默认关闭，后者不覆盖 body。实测 Playwright 的 `browser_network_request` 默认过滤请求头中的 Cookie 与 Set-Cookie（要完整原始头得走 run_code）。 <sup>7</sup> 输入侧占位符机制完备；网络返回值无打码。 <sup>8</sup> `browser_run_code_unsafe` 自述 RCE-equivalent，默认开启。 <sup>9</sup> ego 无网络类原生 helper，但 `page.cdp()` 逃生舱实测可达：原始头在 CDP ExtraInfo 事件里、需按 requestId 自行配对，WS 帧可抓，mock/限速/trace 均可做；全程 Cookie 明文无打码。 <sup>10</sup> ego 与 browser-use 的主接口都是代码（heredoc / Python），任意代码执行是设计使然。 <sup>11</sup> 实测无 ARIA 浮层不进 ego 的语义快照（与正文平铺同树、无模态标记，仅点击报错会点名遮挡元素），快照不含元素像素坐标，跨源帧顶层坐标需自行计算；browser-use 的元素表则会把遮罩下按钮整个过滤掉、坐标点击会误报成功，观察输出同样不含像素坐标。 <sup>12</sup> 实测 Playwright MCP 0.0.80 包内并无 mock/限速/trace 类工具（其 README 文档所载 `browser_route`/tracing 未随该版本发布），WS 帧、发起调用栈、curl 导出也无原生工具；均可用 `browser_run_code_unsafe` 逃生舱补做。
+<sup>1</sup> 仅 `--extension` 模式（Chrome/Edge，需装其扩展）；默认模式是独立 profile。 <sup>2</sup> 仅 `--autoConnect`（Chrome 144+，需在 `chrome://inspect` 手动开闸，该 profile 全部窗口暴露）。 <sup>3</sup> 二选一：CDP 直连已开调试端口的 Chrome，或用自带浏览器（独立 profile，不带用户登录态）。 <sup>4</sup> 独立 Chromium 分叉浏览器；登录态靠导入而非实时借用——`ego-browser import` 可从 Chrome/Edge/Brave 重复导入（扩展一并迁入）。 <sup>5</sup> Windows 插件模式与 CLI/headless 模式均已支持；Linux 路径已写未验证。 <sup>6</sup> Playwright 的 `--secrets` 与 DevTools 的 `--redactNetworkHeaders` 均为可选开关且默认关闭，后者不覆盖 body。实测 Playwright 的 `browser_network_request` 默认过滤请求头中的 Cookie 与 Set-Cookie（要完整原始头得走 run_code）。 <sup>7</sup> 输入侧占位符机制完备；网络返回值无打码。 <sup>8</sup> `browser_run_code_unsafe` 自述 RCE-equivalent，默认开启。 <sup>9</sup> ego 无网络类原生 helper，但 `page.cdp()` 逃生舱实测可达：原始头在 CDP ExtraInfo 事件里、需按 requestId 自行配对，WS 帧可抓，mock/限速/trace 均可做；全程 Cookie 明文无打码。 <sup>10</sup> ego 与 browser-use 的主接口都是代码（heredoc / Python），任意代码执行是设计使然。 <sup>11</sup> 实测无 ARIA 浮层不进 ego 的语义快照（与正文平铺同树、无模态标记，仅点击报错会点名遮挡元素），快照不含元素像素坐标，跨源帧顶层坐标需自行计算；browser-use 的元素表则会把遮罩下按钮整个过滤掉、坐标点击会误报成功，观察输出同样不含像素坐标。 <sup>12</sup> 实测 Playwright MCP 0.0.80 包内并无 mock/限速/trace 类工具（其 README 文档所载 `browser_route`/tracing 未随该版本发布），WS 帧、发起调用栈、curl 导出也无原生工具；均可用 `browser_run_code_unsafe` 逃生舱补做。
 
 **速度**（同一含跨源 iframe 的测试页、对等全新 profile、中位数；browser-use 因需人工在 `chrome://inspect` 逐次授权，无法无人值守完成同一流程，未列入）：
 
@@ -72,7 +72,7 @@ Agent in Chrome 把 AI agent（Claude Code、Claude Desktop、Trae、Codex……
 
 ## 快速开始
 
-> 需要 Node.js 18+ 和 Chrome 125+（或 Edge / Brave / Vivaldi 等 Chromium 系）。目前 macOS 实测完整；Windows 插件模式已支持（命名管道 + 注册表 + .bat 启动器，CLI/headless 模式规划中）；Linux 路径已写待验证（见[已知限制](#已知限制)）。
+> 需要 Node.js 18+ 和 Chrome 125+（或 Edge / Brave / Vivaldi 等 Chromium 系）。目前 macOS 实测完整；Windows 插件模式与 CLI/headless 模式均已支持（命名管道 + 注册表 + .bat 启动器；CLI 模式的进程管理走 PowerShell 进程表）；Linux 路径已写待验证（见[已知限制](#已知限制)）。
 >
 > 18 够用是实测过的：Node 18.20.8 上 `check` 全过、MCP server 起得来、37 个工具都在。唯一的例外在
 > CLI 模式的 `AGENT_IN_CHROME_KEEP=1` 那条路上——它要 Node 的全局 `WebSocket`，**Node 22 才有**；
@@ -333,7 +333,7 @@ npx @liang-hz/agent-in-chrome@latest update
 - **跨源 iframe 被 CSS 变换（旋转/缩放/斜切）过时坐标算不出来**，里面的元素点不了，`read_page` 会标 `coords:"未知"`——改用 `browser_new_tab` 直接打开那个地址。
 - **不做性能 / a11y / SEO 审计打分**——那类需求 `npx lighthouse <url> --view` 一条命令就跑完，还带 Chrome 官方的评分口径；插件模式下我们挂的是你自己那个没有调试端口的 Chrome，硬做只会做出一个更差的 Lighthouse。**分工**：跑分交给 `npx lighthouse`，我们负责它进不去的地方——需要登录态的页面、点开某个面板之后才出现的那一屏、以及看具体某个请求的头和响应体。
 - **没有专门的拖拽工具**——拖滑块、拖放排序、画布手势用 `browser_batch` 串一列 `browser_cdp` 的 `Input.dispatchMouseEvent`（配方在 [skills/agent-in-chrome/references/actions-and-waits.md](skills/agent-in-chrome/references/actions-and-waits.md#拖拽--滑块没有-drag-工具)）；用 `eval` 合成事件派的是 `isTrusted: false`，真验证码不认。
-- **平台**：macOS 完整实测。**Windows 插件模式已支持**（注册表 + 命名管道 + `.bat` 启动器，桥接第一道防线由目录权限换成令牌，详见 `mcp/token.mjs` 的 bridgeEndpoint 注释）；Windows 的 CLI/headless 模式（`AGENT_IN_CHROME_LAUNCH=1`）尚未支持。Linux 路径已写未验证。欢迎 PR。
+- **平台**：macOS 完整实测。**Windows 插件模式与 CLI/headless 模式均已支持**（插件模式：注册表 + 命名管道 + `.bat` 启动器，桥接第一道防线由目录权限换成令牌，详见 `mcp/token.mjs` 的 bridgeEndpoint 注释；CLI 模式：进程表/占用者/收场三处数据源走 Windows 对应物，见 `mcp/cdp/browser-launch.mjs`）。CLI 模式在 Windows 上初测通过，长跑反馈欢迎开 issue。Linux 路径已写未验证。欢迎 PR。
 
 ---
 

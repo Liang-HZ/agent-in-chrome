@@ -14383,23 +14383,41 @@ console.log("\n\x1b[1m冷启动路径：别冻事件循环、别重复 spawn、�
 
   {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "aic-ver-"));
-    const tally = path.join(tmp, "tally");
-    const bin = path.join(tmp, "fake-chrome");
-    fs.writeFileSync(bin, `#!/bin/sh\necho x >> ${tally}\necho "Google Chrome 151.0.7999.1"\n`);
-    fs.chmodSync(bin, 0o755);
-    const out = execFileSync(
-      process.execPath,
-      ["-e", `import(${JSON.stringify(BL)}).then((m) => { for (let i = 0; i < 5; i++) m.browserArgs({ headless: true, bin: ${JSON.stringify(bin)} }); console.log("done"); })`],
-      { encoding: "utf8", env: { ...process.env, HOME: tmp } }
-    );
-    const runs = fs.existsSync(tally) ? fs.readFileSync(tally, "utf8").trim().split("\n").length : 0;
-    check("5 次 browserArgs 只 spawn 一次 --version（原来是 5 次）", runs === 1, `spawn 了 ${runs} 次（${out.trim()}）`);
-    const args = execFileSync(
-      process.execPath,
-      ["-e", `import(${JSON.stringify(BL)}).then((m) => console.log(m.browserArgs({ headless: true, bin: ${JSON.stringify(bin)} }).join("\\n")))`],
-      { encoding: "utf8", env: { ...process.env, HOME: tmp } }
-    );
-    check("缓存的版本号确实用上了（UA 里是 151）", /--user-agent=.*Chrome\/151\.0\.0\.0/.test(args), (args.match(/--user-agent=.*/) || [""])[0]);
+    const homeEnv = process.platform === "win32" ? { HOME: tmp, USERPROFILE: tmp } : { HOME: tmp };
+    if (process.platform === "win32") {
+      const bin = path.join(tmp, "chrome.exe");
+      fs.writeFileSync(bin, "");
+      fs.mkdirSync(path.join(tmp, "151.0.7999.1"));
+      fs.mkdirSync(path.join(tmp, "149.0.1111.2"));
+      const args = execFileSync(
+        process.execPath,
+        ["-e", `import(${JSON.stringify(BL)}).then((m) => console.log(m.browserArgs({ headless: true, bin: ${JSON.stringify(bin)} }).join("\\n")))`],
+        { encoding: "utf8", env: { ...process.env, ...homeEnv } }
+      );
+      check(
+        "Windows 版本号从安装目录读（空 exe 也读得出，多版本目录挑最大）",
+        /--user-agent=.*Chrome\/151\.0\.0\.0/.test(args),
+        (args.match(/--user-agent=.*/) || ["（没有 --user-agent）"])[0]
+      );
+    } else {
+      const tally = path.join(tmp, "tally");
+      const bin = path.join(tmp, "fake-chrome");
+      fs.writeFileSync(bin, `#!/bin/sh\necho x >> ${tally}\necho "Google Chrome 151.0.7999.1"\n`);
+      fs.chmodSync(bin, 0o755);
+      const out = execFileSync(
+        process.execPath,
+        ["-e", `import(${JSON.stringify(BL)}).then((m) => { for (let i = 0; i < 5; i++) m.browserArgs({ headless: true, bin: ${JSON.stringify(bin)} }); console.log("done"); })`],
+        { encoding: "utf8", env: { ...process.env, ...homeEnv } }
+      );
+      const runs = fs.existsSync(tally) ? fs.readFileSync(tally, "utf8").trim().split("\n").length : 0;
+      check("5 次 browserArgs 只 spawn 一次 --version（原来是 5 次）", runs === 1, `spawn 了 ${runs} 次（${out.trim()}）`);
+      const args = execFileSync(
+        process.execPath,
+        ["-e", `import(${JSON.stringify(BL)}).then((m) => console.log(m.browserArgs({ headless: true, bin: ${JSON.stringify(bin)} }).join("\\n")))`],
+        { encoding: "utf8", env: { ...process.env, ...homeEnv } }
+      );
+      check("缓存的版本号确实用上了（UA 里是 151）", /--user-agent=.*Chrome\/151\.0\.0\.0/.test(args), (args.match(/--user-agent=.*/) || [""])[0]);
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 
@@ -14422,7 +14440,7 @@ console.log("\n\x1b[1m冷启动路径：别冻事件循环、别重复 spawn、�
                process.stdout.write(String(n));
              });`.replace("MODPLACEHOLDER", mod),
           ],
-          { encoding: "utf8", env: { ...process.env, HOME: tmp }, stdio: ["ignore", "pipe", "ignore"] }
+          { encoding: "utf8", env: { ...process.env, HOME: tmp, USERPROFILE: tmp }, stdio: ["ignore", "pipe", "ignore"] }
         ).trim()
       );
     const n = count(BL);

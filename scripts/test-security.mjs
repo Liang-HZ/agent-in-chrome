@@ -912,7 +912,7 @@ console.log("\n\x1b[1mP4-3 native host 的缓冲上限\x1b[0m");
   box.clean();
 }
 
-console.log("\n\x1b[1mP4-4 Windows 上 CLI/headless 模式必须被拒\x1b[0m");
+console.log("\n\x1b[1mP4-4 Windows 上 CLI/headless 模式可用（0.55.x 的拒绝闸已撤）\x1b[0m");
 {
   const box = sandbox("cli");
   const runAs = (platform, env) =>
@@ -938,11 +938,13 @@ console.log("\n\x1b[1mP4-4 Windows 上 CLI/headless 模式必须被拒\x1b[0m");
     });
 
   const win = await runAs("win32", { AGENT_IN_CHROME_LAUNCH: "1", AGENT_IN_CHROME_BIN: "C:\\nope\\chrome.exe" });
-  check("win32 + LAUNCH=1 直接退出（旧代码会一路进到 CLI 模式）", win.code === 1, `exit=${win.code}`);
-  check("说了为什么不支持", /不支持|拒绝启动/.test(win.err) && /chrome/i.test(win.err), oneline(win.err));
-  check("说了插件模式不受影响", /插件模式/.test(win.err), oneline(win.err));
-  check("给了去哪跟进", /README|browser-launch/.test(win.err), oneline(win.err));
-  check("拒绝文案点明 AGENT_IN_CHROME_BIN 绕不过去", /AGENT_IN_CHROME_BIN.*绕不过去|绕过的只是/.test(win.err), oneline(win.err, 300));
+  check("win32 + LAUNCH=1 照常启动（不再拒绝）", win.code === null, `exit=${win.code} ${oneline(win.err, 200)}`);
+  check("拒绝文案不会再出现", !/拒绝启动|不支持 CLI\/headless/.test(win.err), oneline(win.err, 200));
+  check(
+    "起不了浏览器的原因报得出来（点名 BIN，进程不死）",
+    /自启浏览器失败/.test(win.err) && /AGENT_IN_CHROME_BIN|nope/.test(win.err),
+    oneline(win.err, 300)
+  );
 
   const mac = await runAs("darwin", { AGENT_IN_CHROME_LAUNCH: "1" });
   check("非 win32 不受影响（没有被这道闸拦下）", !/不支持 CLI\/headless/.test(mac.err), oneline(mac.err));
