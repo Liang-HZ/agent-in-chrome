@@ -33,6 +33,7 @@ import {
   readClientSessionFile,
   readHostSessionTitle,
   readWorkbuddySessionTitle,
+  workbuddyConfigDir,
   workbuddyConversationId,
   informativeName,
   composeAgent,
@@ -44,6 +45,7 @@ import {
   userDataDirFrom,
   readTraeSessionTitle,
   resetTitleMemo,
+  setSqliteColumn,
   readClaudeSubagent,
   resetSubagentMemo,
   procSource,
@@ -51,6 +53,10 @@ import {
 } from "../mcp/agent-identity.mjs";
 import { isLauncherFor } from "../mcp/session-id.mjs";
 import { makeWinProcSource } from "../mcp/proc-win.mjs";
+
+const NODE_SQLITE_TEST = await import("node:sqlite")
+  .then((m) => m.DatabaseSync)
+  .catch(() => null);
 
 let passed = 0;
 let failed = 0;
@@ -274,6 +280,7 @@ console.log("\n\x1b[1m会话标题：客户端写在磁盘上的那份\x1b[0m");
 console.log("\n\x1b[1mWorkBuddy 的会话标题：协议级 → 引擎进程 → 活会话计数\x1b[0m");
 {
   const wb = fs.mkdtempSync(path.join(os.tmpdir(), "aic-wb-"));
+  const wbEmptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "aic-wb0-"));
   fs.mkdirSync(path.join(wb, "sessions"));
   const put = (pid, extra) => fs.writeFileSync(path.join(wb, "sessions", `${pid}.json`), JSON.stringify({ pid, ...extra }));
   const A = "649aa100-f37d-4bff-b8db-7518eef9a95d";
@@ -287,63 +294,76 @@ console.log("\n\x1b[1mWorkBuddy 的会话标题：协议级 → 引擎进程 →
 
   const env = { WORKBUDDY_CONFIG_DIR: wb };
   let asked = null;
-  const fakeExec = (bin, args) => {
-    asked = { bin, sql: args[args.length - 1] };
-    return "查竞品定价\n";
+  const fakeSql = (db, sql, params) => {
+    asked = { db, sql, params };
+    return ["查竞品定价"];
   };
+  setSqliteColumn(fakeSql);
   const oneLive = (p) => p === 7100;
 
-  const one = readWorkbuddySessionTitle({ env, exec: fakeExec, alive: oneLive });
+  const one = readWorkbuddySessionTitle({ env, alive: oneLive });
   check("兜底：恰好一个活着的对话时读它的标题", one === "查竞品定价", JSON.stringify(one));
-  check("兜底：查库带的是那段对话的 uuid（先验过形状才拼 SQL）", /649aa100-f37d-4bff-b8db-7518eef9a95d/.test(asked?.sql || ""), asked?.sql);
+  check("兜底：查库带的是那段对话的 uuid（先验过形状才进查询）", asked?.params?.[0] === "649aa100-f37d-4bff-b8db-7518eef9a95d", JSON.stringify(asked));
   check("兜底：CLI host / prewarm 的假会话不算对话", one === "查竞品定价");
   check(
     "兜底：两段对话都活着又没有别的证据时仍然不猜",
-    readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true }) === null
+    readWorkbuddySessionTitle({ env, alive: () => true }) === null
   );
-  check("兜底：对话都结束了就是没有", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false }) === null);
-  check("没有 WORKBUDDY_CONFIG_DIR（别家客户端）一律 null", readWorkbuddySessionTitle({ env: {}, exec: fakeExec }) === null);
+  check("兜底：对话都结束了就是没有", readWorkbuddySessionTitle({ env, alive: () => false }) === null);
   check(
-    "库读不动就不显示，不许编",
-    readWorkbuddySessionTitle({ env, exec: () => { throw new Error("no db"); }, alive: oneLive }) === null
+    "没有 WORKBUDDY_CONFIG_DIR：回它家默认的 ~/.workbuddy（home 指到空目录时自然没有）",
+    readWorkbuddySessionTitle({ env: {}, home: wbEmptyHome, alive: oneLive }) === null
   );
+  check("库读不动就不显示，不许编",
+    (setSqliteColumn(() => { throw new Error("no db"); }), readWorkbuddySessionTitle({ env, alive: oneLive }) === null)
+  );
+  setSqliteColumn(fakeSql);
+
+  {
+    const wbHome = fs.mkdtempSync(path.join(os.tmpdir(), "aic-wbfb-"));
+    fs.cpSync(wb, path.join(wbHome, ".workbuddy"), { recursive: true });
+    asked = null;
+    const fb = readWorkbuddySessionTitle({ env: {}, home: wbHome, alive: oneLive });
+    check("回落：env 不带 WORKBUDDY_CONFIG_DIR 也读得到（Windows 的常态）", fb === "查竞品定价", JSON.stringify(fb));
+    check("回落：读的库就在 <home>/.workbuddy 下", asked?.db === path.join(wbHome, ".workbuddy", "workbuddy.db"), asked?.db);
+    fs.rmSync(wbHome, { recursive: true, force: true });
+  }
+  setSqliteColumn(fakeSql);
 
   asked = null;
-  const byMeta = readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true, meta: { "workbuddy.ai/conversationId": B } });
+  const byMeta = readWorkbuddySessionTitle({ env, alive: () => true, meta: { "workbuddy.ai/conversationId": B } });
   check("协议级：_meta 报的会话 id 优先于活会话计数（多开对话照样归属）", byMeta === "查竞品定价", JSON.stringify(byMeta));
-  check("协议级：查的是 _meta 报的那个 uuid，不是「活着的那个」", /0f179b98-cf6a-4c42-a9e5-02766f6d131f/.test(asked?.sql || ""), asked?.sql);
+  check("协议级：查的是 _meta 报的那个 uuid，不是「活着的那个」", asked?.params?.[0] === B, JSON.stringify(asked));
 
   asked = null;
   const byBaggage = readWorkbuddySessionTitle({
     env,
-    exec: fakeExec,
     alive: () => true,
     meta: { progressToken: 7, baggage: "codebuddy.session_id=" + A + ",other=1" },
   });
-  check("协议级：baggage 里的 codebuddy.session_id 是同一份值的第二处写法", byBaggage === "查竞品定价" && /649aa100/.test(asked?.sql || ""), asked?.sql);
+  check("协议级：baggage 里的 codebuddy.session_id 是同一份值的第二处写法", byBaggage === "查竞品定价" && asked?.params?.[0] === A, JSON.stringify(asked));
 
   asked = null;
   readWorkbuddySessionTitle({
     env,
-    exec: fakeExec,
     alive: () => true,
     meta: { "workbuddy.ai/conversationId": B, baggage: "codebuddy.session_id=" + A },
   });
-  check("协议级：命名空间键优先于 baggage（两处都带时以前者为准）", /0f179b98/.test(asked?.sql || ""), asked?.sql);
+  check("协议级：命名空间键优先于 baggage（两处都带时以前者为准）", asked?.params?.[0] === B, JSON.stringify(asked));
 
   check("协议级：形状锚只放行 uuid（不是 uuid 就当没报）", workbuddyConversationId({ "workbuddy.ai/conversationId": "abc" }) === null);
   check("协议级：meta 不是对象时不炸", workbuddyConversationId(null) === null && workbuddyConversationId("x") === null);
 
   asked = null;
-  const byPid = readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true, enginePid: 7100 });
-  check("进程级：引擎 pid 的记录直接给出会话 id（真机上就是它）", byPid === "查竞品定价" && /649aa100/.test(asked?.sql || ""), asked?.sql);
-  check("进程级：引擎 pid 的文件里 pid 对不上（pid 被复用）就不认", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false, enginePid: 7200 }) === null);
-  check("进程级：指向预热池那种非 interactive 的记录不认", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false, enginePid: 7102 }) === null);
-  check("进程级：指着一个不存在的 pid 就是没有，不炸", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => false, enginePid: 7999 }) === null);
-  check("进程级：没给引擎 pid 时这一档整个跳过", readWorkbuddySessionTitle({ env, exec: fakeExec, alive: oneLive, enginePid: null }) === "查竞品定价");
+  const byPid = readWorkbuddySessionTitle({ env, alive: () => true, enginePid: 7100 });
+  check("进程级：引擎 pid 的记录直接给出会话 id（真机上就是它）", byPid === "查竞品定价" && asked?.params?.[0] === A, JSON.stringify(asked));
+  check("进程级：引擎 pid 的文件里 pid 对不上（pid 被复用）就不认", readWorkbuddySessionTitle({ env, alive: () => false, enginePid: 7200 }) === null);
+  check("进程级：指向预热池那种非 interactive 的记录不认", readWorkbuddySessionTitle({ env, alive: () => false, enginePid: 7102 }) === null);
+  check("进程级：指着一个不存在的 pid 就是没有，不炸", readWorkbuddySessionTitle({ env, alive: () => false, enginePid: 7999 }) === null);
+  check("进程级：没给引擎 pid 时这一档整个跳过", readWorkbuddySessionTitle({ env, alive: oneLive, enginePid: null }) === "查竞品定价");
   asked = null;
-  readWorkbuddySessionTitle({ env, exec: fakeExec, alive: () => true, enginePid: 7100, meta: { "workbuddy.ai/conversationId": B } });
-  check("协议级压过进程级（调用方自己说的那句最硬）", /0f179b98/.test(asked?.sql || ""), asked?.sql);
+  readWorkbuddySessionTitle({ env, alive: () => true, enginePid: 7100, meta: { "workbuddy.ai/conversationId": B } });
+  check("协议级压过进程级（调用方自己说的那句最硬）", asked?.params?.[0] === B, JSON.stringify(asked));
 
   {
     const evil = fs.mkdtempSync(path.join(os.tmpdir(), "aic-wb-evil-"));
@@ -351,32 +371,36 @@ console.log("\n\x1b[1mWorkBuddy 的会话标题：协议级 → 引擎进程 →
     fs.writeFileSync(path.join(evil, "sessions", "8000.json"),
       JSON.stringify({ pid: 8000, kind: "interactive", sessionId: "1' or '1'='1" }));
     const never = () => { throw new Error("绝不该拿注入载荷查库"); };
-    check("带引号的 sessionId 不进 SQL（活会话那条路的正则先挡）",
-      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, alive: () => true }) === null);
-    check("带引号的 _meta.conversationId 不进 SQL（协议级那条路同样先挡）",
-      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, meta: { "workbuddy.ai/conversationId": "1' or '1'='1" } }) === null);
-    check("带引号的 baggage 不进 SQL",
-      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, meta: { baggage: "codebuddy.session_id=x' or 1=1--" } }) === null);
-    check("带引号的引擎记录同样进不去 SQL",
-      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, exec: never, enginePid: 8000 }) === null);
+    setSqliteColumn(never);
+    check("带引号的 sessionId 不进查询（活会话那条路的正则先挡）",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, alive: () => true }) === null);
+    check("带引号的 _meta.conversationId 不进查询（协议级那条路同样先挡）",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, meta: { "workbuddy.ai/conversationId": "1' or '1'='1" } }) === null);
+    check("带引号的 baggage 不进查询",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, meta: { baggage: "codebuddy.session_id=x' or 1=1--" } }) === null);
+    check("带引号的引擎记录同样进不去查询",
+      readWorkbuddySessionTitle({ env: { WORKBUDDY_CONFIG_DIR: evil }, enginePid: 8000 }) === null);
     fs.rmSync(evil, { recursive: true, force: true });
+    setSqliteColumn(fakeSql);
   }
 
-  const t = readSessionTitle({ clientPid: 0, hostSessionId: null }, { home: wb, env, exec: fakeExec, alive: oneLive });
+  const t = readSessionTitle({ clientPid: 0, hostSessionId: null }, { home: wb, env, alive: oneLive });
   check("readSessionTitle 兜到 WorkBuddy 这条来源", t === "查竞品定价", JSON.stringify(t));
   const t2 = readSessionTitle(
     { clientPid: 0, hostSessionId: null },
-    { home: wb, env, exec: fakeExec, alive: () => true, meta: { "workbuddy.ai/conversationId": B } }
+    { home: wb, env, alive: () => true, meta: { "workbuddy.ai/conversationId": B } }
   );
   check("readSessionTitle 把 _meta 一路传给了 WorkBuddy 这一条（不传的话多开对话就丢会话名）", t2 === "查竞品定价", JSON.stringify(t2));
   asked = null;
   const t3 = readSessionTitle(
     { clientPid: 7100, hostSessionId: null },
-    { home: wb, env, exec: fakeExec, alive: () => true }
+    { home: wb, env, alive: () => true }
   );
-  check("readSessionTitle 把 clientPid 当作引擎 pid 传下去", t3 === "查竞品定价" && /649aa100/.test(asked?.sql || ""), asked?.sql);
+  check("readSessionTitle 把 clientPid 当作引擎 pid 传下去", t3 === "查竞品定价" && asked?.params?.[0] === A, JSON.stringify(asked));
 
+  setSqliteColumn(null);
   fs.rmSync(wb, { recursive: true, force: true });
+  fs.rmSync(wbEmptyHome, { recursive: true, force: true });
 }
 
 console.log("\n\x1b[1m拼出显示用的那个对象\x1b[0m");
@@ -499,60 +523,66 @@ console.log("\n\x1b[1mZCode 的会话标题：_meta.session_id 精确归属\x1b[
   fs.writeFileSync(path.join(home, ".zcode", "cli", "db", "db.sqlite"), "");
   const SID = "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4";
   let asked = null;
-  const fakeExec = (bin, args) => {
-    asked = { bin, sql: args[args.length - 1] };
-    return "接管浏览器标签组并打开谷歌搜索\n";
+  const fakeSql = (db, sql, params) => {
+    asked = { db, sql, params };
+    return ["接管浏览器标签组并打开谷歌搜索"];
   };
-  const at = (meta, exec = fakeExec) => {
+  setSqliteColumn(fakeSql);
+  const at = (meta, sql = fakeSql) => {
+    asked = null;
     resetTitleMemo();
-    return readZcodeSessionTitle(meta, { home, exec, env: {} });
+    setSqliteColumn(sql);
+    return readZcodeSessionTitle(meta, { home, env: {} });
   };
 
   check("主会话：按 _meta.session_id 读它自己的标题", at({ session_id: SID, runtime_scope: "main" }) === "接管浏览器标签组并打开谷歌搜索");
-  check("查的是 session 表、只认 generated/custom", /from session where id='sess_0a33b40d/.test(asked?.sql || "") && /title_source in \('generated','custom'\)/.test(asked?.sql || ""), asked?.sql);
-  check("走的是系统自带 sqlite3 的只读模式", asked?.bin === "/usr/bin/sqlite3");
+  check("查的是 session 表、只认 generated/custom", /from session where id=\?/.test(asked?.sql || "") && /title_source in \('generated','custom'\)/.test(asked?.sql || ""), asked?.sql);
+  check("会话 id 是绑定参数，不是拼进 SQL 的字面量", asked?.params?.[0] === SID, JSON.stringify(asked?.params));
+  check("读的库就是它家数据目录里那份", asked?.db === path.join(home, ".zcode", "cli", "db", "db.sqlite"), asked?.db);
   check("没给 runtime_scope 也认（老版本客户端）", at({ session_id: SID }) === "接管浏览器标签组并打开谷歌搜索");
   const SUB = "sess_subagent_agent_a1100314-0000-4000-8000-000000000000";
   check("subagent 的调用报的是主会话的名字", at({ session_id: SUB, runtime_scope: "subagent" }) === "接管浏览器标签组并打开谷歌搜索");
   check(
     "subagent 走的是 parent_id 那一跳，不读它自己那行的 first_input",
-    /where id=\(select parent_id from session where id='sess_subagent_agent_a1100314/.test(asked?.sql || "") &&
-      /title_source in \('generated','custom'\)/.test(asked?.sql || ""),
-    asked?.sql
+    /where id=\(select parent_id from session where id=\?\)/.test(asked?.sql || "") &&
+      /title_source in \('generated','custom'\)/.test(asked?.sql || "") &&
+      asked?.params?.[0] === SUB,
+    JSON.stringify(asked)
   );
   check(
-    "subagent 的 id 形状也要卡死（它同样直接拼进 SQL）",
-    readZcodeSessionTitle(
-      { session_id: "sess_subagent_agent_a1100314-0000-4000-8000-000000000000' or '1'='1" },
-      { home, env: {}, exec: () => { throw new Error("绝不该拿注入载荷去查库"); } }
-    ) === null
+    "subagent 的 id 形状也要卡死（它同样进查询）",
+    at({ session_id: "sess_subagent_agent_a1100314-0000-4000-8000-000000000000' or '1'='1" }, () => {
+      throw new Error("绝不该拿注入载荷去查库");
+    }) === null
   );
-  check("形状不对的 id 一律不拼进 SQL", at({ session_id: "sess_'; drop table session; --" }) === null);
+  check("形状不对的 id 一律不进查询", at({ session_id: "sess_'; drop table session; --" }) === null);
   for (const bad of [
     "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4'",
     "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4' or '1'='1",
     "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4'--",
     "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4 union select 1",
-    "sess_0a33b40d%2d8caa",
+    "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4%2d8caa",
   ]) {
-    check(`注入载荷被正则拦下，绝不起 sqlite3：${bad.slice(30) || bad}`,
-      readZcodeSessionTitle({ session_id: bad }, { home, env: {}, exec: () => { throw new Error("绝不该拿注入载荷去查库"); } }) === null);
+    check(`注入载荷被正则拦下，绝不起查询：${bad.slice(30) || bad}`,
+      at({ session_id: bad }, () => { throw new Error("绝不该拿注入载荷去查库"); }) === null);
   }
   check("别家客户端的 _meta（没有 session_id）不认", at({ progressToken: 1 }) === null);
   check("没有 _meta 也不能抛", at(null) === null && at(undefined) === null);
   check("库读不动就不显示，不许编", at({ session_id: SID }, () => { throw new Error("locked"); }) === null);
-  check("标题还没生成（查出来是空）就是没有", at({ session_id: SID }, () => "\n") === null);
+  check("标题还没生成（查出来是空）就是没有", at({ session_id: SID }, () => ["\n"]) === null);
 
   resetTitleMemo();
   let calls = 0;
-  const counting = () => { calls++; return "标题\n"; };
-  readZcodeSessionTitle({ session_id: SID }, { home, env: {}, exec: counting });
-  readZcodeSessionTitle({ session_id: SID }, { home, env: {}, exec: counting });
-  readZcodeSessionTitle({ session_id: SID }, { home, env: {}, exec: counting });
-  check("查到过的标题记住，不再重复起 sqlite3", calls === 1, `起了 ${calls} 次`);
+  setSqliteColumn(() => { calls++; return ["标题"]; });
+  readZcodeSessionTitle({ session_id: SID }, { home, env: {} });
+  readZcodeSessionTitle({ session_id: SID }, { home, env: {} });
+  readZcodeSessionTitle({ session_id: SID }, { home, env: {} });
+  check("查到过的标题记住，不再重复读库", calls === 1, `读了 ${calls} 次`);
 
   const bare = fs.mkdtempSync(path.join(os.tmpdir(), "aic-zc0-"));
-  check("本机没装 ZCode 就直接不查", readZcodeSessionTitle({ session_id: SID }, { home: bare, env: {}, exec: () => { throw new Error("不该被调用"); } }) === null);
+  setSqliteColumn(() => { throw new Error("不该被调用"); });
+  check("本机没装 ZCode 就直接不查", readZcodeSessionTitle({ session_id: SID }, { home: bare, env: {} }) === null);
+  setSqliteColumn(null);
   fs.rmSync(home, { recursive: true, force: true });
   fs.rmSync(bare, { recursive: true, force: true });
 }
@@ -710,12 +740,13 @@ console.log("\n\x1b[1m标题的取用顺序：先协议级（_meta），后本�
     JSON.stringify({ pid: 7003, sessionId: "s", name: "本机取证认到的名字", nameSource: "generated" })
   );
   const local = { clientPid: 7003, hostSessionId: null, sessionName: null };
-  const exec = () => "协议级认到的名字\n";
   resetTitleMemo();
+  setSqliteColumn(() => ["协议级认到的名字"]);
   check(
     "_meta 报了会话身份时，用它，不用本机取证那条",
-    readSessionTitle(local, { home, exec, meta: { session_id: "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4" } }) === "协议级认到的名字"
+    readSessionTitle(local, { home, meta: { session_id: "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4" } }) === "协议级认到的名字"
   );
+  setSqliteColumn(null);
   resetTitleMemo();
   check("没有 _meta 的客户端行为一字不变", readSessionTitle(local, { home, exec: () => { throw new Error("不该查库"); } }) === "本机取证认到的名字");
   resetTitleMemo();
@@ -1112,12 +1143,25 @@ console.log("\n\x1b[1mAntigravity：数据目录自报 + 会话库里的工作�
           : Buffer.alloc(0),
       ]);
     const writeDb = (file, rows, { wal = false } = {}) => {
-      const sql = [
-        wal ? "PRAGMA journal_mode=WAL;" : "",
-        "CREATE TABLE steps (idx INTEGER, step_type INTEGER, status INTEGER, has_subtrajectory INTEGER, metadata BLOB, error_details BLOB, permissions BLOB, task_details BLOB, render_info BLOB, step_payload BLOB, step_format INTEGER);",
-        ...rows.map(([idx, type, payload]) => `INSERT INTO steps (idx, step_type, step_payload) VALUES (${idx}, ${type}, ${payload ? `x'${payload.toString("hex")}'` : "NULL"});`),
-      ].join("\n");
-      execFileSync(SQLITE, [file], { input: `${sql}\n`, encoding: "utf8" });
+      const ddl =
+        (wal ? "PRAGMA journal_mode=WAL;" : "") +
+        "CREATE TABLE steps (idx INTEGER, step_type INTEGER, status INTEGER, has_subtrajectory INTEGER, metadata BLOB, error_details BLOB, permissions BLOB, task_details BLOB, render_info BLOB, step_payload BLOB, step_format INTEGER);";
+      const inserts = rows.map(
+        ([idx, type, payload]) =>
+          `INSERT INTO steps (idx, step_type, step_payload) VALUES (${idx}, ${type}, ${payload ? `x'${payload.toString("hex")}'` : "NULL"});`
+      );
+      if (NODE_SQLITE_TEST) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const db = new NODE_SQLITE_TEST(file);
+        try {
+          db.exec(ddl);
+          for (const s of inserts) db.exec(s);
+        } finally {
+          db.close();
+        }
+        return;
+      }
+      execFileSync(SQLITE, [file], { input: `${ddl}\n${inserts.join("\n")}\n`, encoding: "utf8" });
     };
     const dbPath = (home, id = ID) => path.join(home, ".gemini", "antigravity-ide", "conversations", `${id}.db`);
     const titleOf = (home, meta = metaFor(), opts = {}) => {
@@ -1451,6 +1495,25 @@ console.log("\n\x1b[1mCodex：_meta 的 thread_id 精确归属 + session_index.j
   }
 
   {
+    if (!NODE_SQLITE_TEST) {
+      check("本机没有 node:sqlite，Codex state 库回落这条在老 Node 上验不了", false, "Node < 22.5");
+    } else {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "aic-cxsd-"));
+      fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+      const db = new NODE_SQLITE_TEST(path.join(home, ".codex", "state_5.sqlite"));
+      db.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL);");
+      db.prepare("INSERT INTO threads (id, title) VALUES (?, ?)").run(ID, "state 库里的线程名");
+      db.close();
+      resetTitleMemo();
+      const t = readCodexSessionTitle(metaFor(), { home, env: {} });
+      check("没有 session_index.jsonl（Windows）：从 state 库的 threads.title 认出来", t === "state 库里的线程名", String(t));
+      resetTitleMemo();
+      check("state 库里没有这个 id 就是没有", readCodexSessionTitle(metaFor("00000000-0000-4000-8000-000000000000"), { home, env: {} }) === null);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  {
     const long = "标".repeat(80);
     const home = cxHome(row(ID, long));
     const t = at(metaFor(), home);
@@ -1717,7 +1780,7 @@ console.log("\n\x1b[1mopencode：帧里只有 progressToken，靠「这一次调
   check("同一次调用只查一次盘", c1?.title === "获取浏览器状态原始JSON结果" && c2?.title === c1.title && reads === 1, `查了 ${reads} 次`);
 
   check("默认落在 ~/.local/share/opencode", opencodeDataDir({ env: {}, home: "/h" }) === path.join("/h", ".local", "share", "opencode"));
-  check("XDG_DATA_HOME 覆盖（写死路径会读到另一个安装的库）", opencodeDataDir({ env: { XDG_DATA_HOME: "/x" }, home: "/h" }) === "/x/opencode");
+  check("XDG_DATA_HOME 覆盖（写死路径会读到另一个安装的库）", opencodeDataDir({ env: { XDG_DATA_HOME: "/x" }, home: "/h" }) === path.join("/x", "opencode"));
 
   check("认 CLI（brew 里那个真身）", isOpencodeClient("/opt/homebrew/Cellar/opencode/1.18.31/bin/opencode"));
   check("认桌面端", isOpencodeClient("/Applications/OpenCode.app/Contents/MacOS/OpenCode"));

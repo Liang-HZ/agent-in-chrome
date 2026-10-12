@@ -446,30 +446,37 @@ export function readClaudeSubagent(meta, local, { fs = fsMod, home = osMod.homed
   return null;
 }
 
+export function workbuddyConfigDir({ env = process.env, home = osMod.homedir() } = {}) {
+  const d = typeof env.WORKBUDDY_CONFIG_DIR === "string" ? env.WORKBUDDY_CONFIG_DIR.trim() : "";
+  return d || path.join(home, ".workbuddy");
+}
+
 export function readWorkbuddySessionTitle({
   env = process.env,
+  home = osMod.homedir(),
   fs = fsMod,
   exec = execFileSync,
   alive = pidAlive,
   meta = null,
   enginePid = null,
 } = {}) {
-  const dir = typeof env.WORKBUDDY_CONFIG_DIR === "string" ? env.WORKBUDDY_CONFIG_DIR : "";
+  const dir = workbuddyConfigDir({ env, home });
   if (!path.isAbsolute(dir)) return null;
   const id =
     workbuddyConversationId(meta) ||
     workbuddyEngineSession(dir, enginePid, { fs }) ||
     workbuddyOnlyLiveSession(dir, { fs, alive });
   if (!id) return null;
-  /* `${id}` 是直接拼进 SQL 字符串的（sqlite3 CLI 不好参数化），所以上面三个来源都必须
-   * 先过 CONV_UUID_RE 才走得到这里：把那个锚放宽就等于开一个注入口。 */
+  /* id 会以绑定参数进查询（CLI 退路里才落成字面量，本层有转义兜底）。形状锚
+   * CONV_UUID_RE 照旧不许放宽：它是这条链的第一道闸，不是最后一道。 */
   try {
-    const out = exec(
-      process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3",
-      ["-readonly", path.join(dir, "workbuddy.db"), `select coalesce(custom_title, title) from sessions where id='${id}' and deleted_at is null`],
-      { encoding: "utf8", timeout: 2000 }
+    const rows = sqliteColumn(
+      path.join(dir, "workbuddy.db"),
+      "select coalesce(custom_title, title) from sessions where id=? and deleted_at is null",
+      [id],
+      exec
     );
-    return clip(String(out || "").trim(), 60);
+    return clip(String(rows[0] ?? "").trim(), 60);
   } catch {
     return null;
   }
@@ -612,6 +619,41 @@ export function resetTitleMemo() {
   agWsMemo.clear();
 }
 
+// 顶层 await：只等一个内置模块的 import（微任务级），之后所有读库函数保持同步——
+// 调用方（每帧的身份刷新）是同步上下文，等不起 promise。
+const NODE_SQLITE = await import("node:sqlite")
+  .then((m) => m.DatabaseSync)
+  .catch(() => null);
+
+/* 只给测试用：换掉读库实现（传 null 恢复默认），让四家读取器不必真库也能验 */
+let sqliteColumnImpl = null;
+export function setSqliteColumn(fn) {
+  sqliteColumnImpl = fn;
+}
+
+export function sqliteColumn(db, sql, params = [], exec = execFileSync) {
+  if (sqliteColumnImpl) return sqliteColumnImpl(db, sql, params);
+  if (NODE_SQLITE) {
+    if (!fsMod.existsSync(db)) throw new Error(`no such db: ${db}`);
+    const d = new NODE_SQLITE(db, { readOnly: true });
+    try {
+      return d.prepare(sql).all(...params).map((row) => Object.values(row)[0]);
+    } finally {
+      try {
+        d.close();
+      } catch {}
+    }
+  }
+  const bin = process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3";
+  let i = 0;
+  const literal = sql.replace(/\?/g, () => `'${String(params[i++] ?? "").replace(/'/g, "''")}'`);
+  const out = exec(bin, ["-readonly", db, literal], { encoding: "utf8", timeout: 2000, maxBuffer: 16 << 20 });
+  return String(out || "")
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l, idx, arr) => !(idx === arr.length - 1 && l === ""));
+}
+
 export function zcodeDataDir({ env = process.env, home = osMod.homedir() } = {}) {
   const base = typeof env.ZCODE_DATA_BASE_DIR === "string" ? env.ZCODE_DATA_BASE_DIR.trim() : "";
   return path.join(base || home, ".zcode");
@@ -625,12 +667,12 @@ export function readZcodeSessionTitle(meta, { env = process.env, home = osMod.ho
   if (!isMain && !isSub) return null;
   const db = path.join(zcodeDataDir({ env, home }), "cli", "db", "db.sqlite");
   if (!fs.existsSync(db)) return null;
-  const sql = isSub
-    ? `select title from session where id=(select parent_id from session where id='${id}') and title_source in ('generated','custom')`
-    : `select title from session where id='${id}' and title_source in ('generated','custom')`;
   return memoTitle(`zcode:${db}:${id}`, () => {
-    const out = exec("/usr/bin/sqlite3", ["-readonly", db, sql], { encoding: "utf8", timeout: 2000 });
-    return clip(String(out || "").trim(), 60);
+    const sql = isSub
+      ? "select title from session where id=(select parent_id from session where id=?) and title_source in ('generated','custom')"
+      : "select title from session where id=? and title_source in ('generated','custom')";
+    const rows = sqliteColumn(db, sql, [id], exec);
+    return clip(String(rows[0] ?? "").trim(), 60);
   });
 }
 
@@ -1059,14 +1101,15 @@ export function readAntigravitySessionTitle(meta, local, { fs = fsMod, home = os
       try {
         if (fs.statSync(`${db}-wal`).size <= AG_DB_MAX) fs.copyFileSync(`${db}-wal`, `${copy}-wal`);
       } catch {}
-      const out = exec(
-        process.platform === "win32" ? "sqlite3" : "/usr/bin/sqlite3",
-        [copy, `select hex(step_payload) from steps where step_type = ${AG_META_STEP} and length(step_payload) <= ${AG_STEP_MAX} order by idx limit ${AG_STEP_ROWS}`],
-        { encoding: "utf8", timeout: 2000, maxBuffer: AG_OUT_MAX }
+      const lines = sqliteColumn(
+        copy,
+        `select hex(step_payload) from steps where step_type = ${AG_META_STEP} and length(step_payload) <= ${AG_STEP_MAX} order by idx limit ${AG_STEP_ROWS}`,
+        [],
+        exec
       );
       const rows = [];
-      for (const line of String(out || "").split("\n")) {
-        const hex = line.trim();
+      for (const line of lines) {
+        const hex = String(line ?? "").trim();
         if (hex && /^(?:[0-9a-f]{2})+$/i.test(hex)) rows.push(Buffer.from(hex, "hex"));
       }
       return agTitleFromRows(rows);
@@ -1094,45 +1137,61 @@ export function codexThreadId(meta) {
   return CONV_UUID_RE.test(id) ? id : null;
 }
 
-export function readCodexSessionTitle(meta, { env = process.env, home = osMod.homedir(), fs = fsMod } = {}) {
+export function readCodexSessionTitle(meta, { env = process.env, home = osMod.homedir(), fs = fsMod, exec = execFileSync } = {}) {
   const id = codexThreadId(meta);
   if (!id) return null;
-  const file = path.join(codexHome({ env, home }), "session_index.jsonl");
+  const dir = codexHome({ env, home });
+  const file = path.join(dir, "session_index.jsonl");
   return memoTitle(`codex:${file}:${id}`, () => {
     let size = 0;
     try {
       size = fs.statSync(file).size;
     } catch {
-      return null;
+      size = 0;
     }
-    let text;
-    if (size > CODEX_INDEX_MAX && fs.openSync && fs.readSync) {
-      const fd = fs.openSync(file, "r");
-      try {
-        const buf = Buffer.alloc(CODEX_INDEX_TAIL);
-        const n = fs.readSync(fd, buf, 0, CODEX_INDEX_TAIL, size - CODEX_INDEX_TAIL);
-        text = buf.toString("utf8", 0, n);
-      } finally {
+    if (size > 0) {
+      let text;
+      if (size > CODEX_INDEX_MAX && fs.openSync && fs.readSync) {
+        const fd = fs.openSync(file, "r");
         try {
-          fs.closeSync(fd);
-        } catch {}
+          const buf = Buffer.alloc(CODEX_INDEX_TAIL);
+          const n = fs.readSync(fd, buf, 0, CODEX_INDEX_TAIL, size - CODEX_INDEX_TAIL);
+          text = buf.toString("utf8", 0, n);
+        } finally {
+          try {
+            fs.closeSync(fd);
+          } catch {}
+        }
+      } else {
+        text = fs.readFileSync(file, "utf8");
       }
-    } else {
-      text = fs.readFileSync(file, "utf8");
-    }
-    const needle = `"id":"${id}"`;
-    const lines = String(text).split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (!lines[i].includes(needle)) continue;
-      let d = null;
-      try {
-        d = JSON.parse(lines[i]);
-      } catch {
-        continue;
+      const needle = `"id":"${id}"`;
+      const lines = String(text).split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes(needle)) continue;
+        let d = null;
+        try {
+          d = JSON.parse(lines[i]);
+        } catch {
+          continue;
+        }
+        if (!d || d.id !== id) continue;
+        const name = clip(d.thread_name, 60);
+        if (name) return name;
+        break;
       }
-      if (!d || d.id !== id) continue;
-      return clip(d.thread_name, 60);
     }
+    try {
+      const dbs = fs
+        .readdirSync(dir)
+        .filter((f) => /^state_\d+\.sqlite$/.test(f))
+        .sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]));
+      for (const f of dbs) {
+        const rows = sqliteColumn(path.join(dir, f), "select title from threads where id=?", [id], exec);
+        const title = String(rows[0] ?? "").trim();
+        if (title) return clip(title, 60);
+      }
+    } catch {}
     return null;
   });
 }
@@ -1228,7 +1287,7 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
   if (tr) return tr;
   const ag = readAntigravitySessionTitle(meta, local, { fs, home, exec });
   if (ag) return ag;
-  const cx = readCodexSessionTitle(meta, { env, home, fs });
+  const cx = readCodexSessionTitle(meta, { env, home, fs, exec });
   if (cx) return cx;
   if (isOpencodeClient(local.clientCommand)) {
     const oc = opencodeSessionOf(tool, at, { env, home, fs, exec });
@@ -1240,7 +1299,7 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
   if (t) return t;
   const file = readClientSessionFile(local.clientPid, { fs, home });
   if (file && file.nameSource !== "derived") return clip(file.name, 60);
-  const wb = readWorkbuddySessionTitle({ env, fs, exec, alive, meta, enginePid: local.clientPid });
+  const wb = readWorkbuddySessionTitle({ env, home, fs, exec, alive, meta, enginePid: local.clientPid });
   if (wb) return wb;
   return local.sessionName || null;
 }
