@@ -129,7 +129,7 @@ function firstExisting(cands) {
  * 正式版 Chrome → Beta/Canary → Chromium / Edge（指纹会差，最后才用）。
  *
  * Windows 的候选按安装范围排：系统级（Program Files）→ 32 位系统级（Program Files
- * (x86)，Chrome 38 起的官方默认位置）→ 每用户（%LocalAppData%）。Beta/Canary/Dev 各有
+ * (x86)，官方默认位置）→ 每用户（%LocalAppData%）。Beta/Canary/Dev 各有
  * 自己的目录名（Chrome Beta / Chrome SxS / Chrome Dev），Canary 只发每用户安装。
  */
 export function findBrowser() {

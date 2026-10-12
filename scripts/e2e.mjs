@@ -9,6 +9,9 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getToken, timingSafeEqualStr, tokenPath, bridgeEndpoint, handshakeNonce, handshakeProof } from "../mcp/token.mjs";
 
+if (process.platform === "win32" && !process.env.AGENT_IN_CHROME_REG_ROOT)
+  process.env.AGENT_IN_CHROME_REG_ROOT = `HKCU\\Software\\aic-e2e-${process.pid}`;
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "agent-in-chrome-e2e-"));
 const SOCK = path.join(TMP, "t.sock");
@@ -3762,12 +3765,8 @@ console.log("\n\x1b[1mN. 会话身份跨进程重启存活\x1b[0m");
     }
   }
 
-  if (process.platform === "win32") {
-    skipSection("parentStartToken 走 ps lstart，Windows 上按回落档（pid 基 sid）工作——ps 等价物是后续工作");
-  } else {
-    const real = parentStartToken(process.ppid);
-    check("真机上确实读得到父进程启动时刻", typeof real === "string" && real.length > 0, String(real));
-  }
+  const real = parentStartToken(process.ppid);
+  check("真机上确实读得到父进程启动时刻", typeof real === "string" && real.length > 0, String(real));
 
   const { makeInheritor, fingerprintOf } = await import(pathToFileURL(path.join(ROOT, "mcp", "session-id.mjs")).href);
   const ME = { workspace: "agent-in-chrome", brandFallback: null, surface: "cli" };
@@ -3856,7 +3855,11 @@ console.log("\n\x1b[1mN. 会话身份跨进程重启存活\x1b[0m");
   }
   {
     const dir = path.join(TMP, "inherit-payload");
-    deriveSessionId({ env: {}, ppid: 4242, pid: 7777, startToken: () => "tok", identity: ME, claim: makeClaimer({ dir, isAlive: () => false }) });
+    deriveSessionId({
+      env: {}, ppid: 4242, pid: 7777, startToken: () => "tok", identity: ME,
+      inherit: makeInheritor({ dir, isAlive: () => false }),
+      claim: makeClaimer({ dir, isAlive: () => false }),
+    });
     const wrote = JSON.parse(fs.readFileSync(path.join(dir, "session-4242-tok.json"), "utf8"));
     check("认领时把身份指纹写进文件", JSON.stringify(wrote.id) === JSON.stringify(fp), JSON.stringify(wrote));
   }

@@ -568,10 +568,13 @@ console.log("\n\x1b[1mP4-2b 桥接行为：握手窗口 / 代发记账 / 分块�
   const box = sandbox("peerwin");
   getToken(box.dir);
   const EP = bridgeEndpoint(box.sock);
+  const EP_IS_PIPE = EP !== box.sock;
   const got = [];
   let firstConnAt = 0;
+  let closedSilent = 0;
   const owner = net.createServer((c) => {
     firstConnAt = Date.now();
+    let frames = 0;
     c.setEncoding("utf8");
     let b = "";
     c.on("data", (d) => {
@@ -581,11 +584,13 @@ console.log("\n\x1b[1mP4-2b 桥接行为：握手窗口 / 代发记账 / 分块�
         const l = b.slice(0, i).trim();
         b = b.slice(i + 1);
         if (!l) continue;
+        frames++;
         try {
           got.push({ ...JSON.parse(l), at: Date.now() });
         } catch {}
       }
     });
+    c.on("close", () => { if (frames === 0) closedSilent++; });
     c.on("error", () => {});
   });
   await new Promise((r) => owner.listen(EP, r));
@@ -595,19 +600,33 @@ console.log("\n\x1b[1mP4-2b 桥接行为：握手窗口 / 代发记账 / 分块�
   await waitFor(() => firstConnAt > 0, 5000);
   const callAt = Date.now();
   S.rpc("tools/call", { name: "browser_status", arguments: {} });
-  await waitFor(() => got.some((m) => m.type === "hello"), 5000);
-  await sleep(600);
-
-  const iHello = got.findIndex((m) => m.type === "hello");
-  const iCall = got.findIndex((m) => m.type === "call");
-  if (callAt - firstConnAt > 700) {
-    console.log(`  \x1b[90m·\x1b[0m 工具调用没落在握手窗口内（晚了 ${callAt - firstConnAt}ms），跳过这条`);
-  } else {
+  if (EP_IS_PIPE) {
+    await sleep(13000);
     check(
-      "握手走完之前不许把 call 发给主（修复前：连上就发，主会当未认证连接断掉）",
-      iHello >= 0 && (iCall < 0 || iCall > iHello),
+      "管道上对面不出题就一个字节都不发（令牌连明文都不许过线）",
+      got.length === 0,
       JSON.stringify(got.map((m) => m.type))
     );
+    check(
+      "到握手死线把这条没话的连接断掉（不许永久挂着）",
+      closedSilent >= 1,
+      `一条都没断（silent=${closedSilent}）`
+    );
+  } else {
+    await waitFor(() => got.some((m) => m.type === "hello"), 5000);
+    await sleep(600);
+
+    const iHello = got.findIndex((m) => m.type === "hello");
+    const iCall = got.findIndex((m) => m.type === "call");
+    if (callAt - firstConnAt > 700) {
+      console.log(`  \x1b[90m·\x1b[0m 工具调用没落在握手窗口内（晚了 ${callAt - firstConnAt}ms），跳过这条`);
+    } else {
+      check(
+        "握手走完之前不许把 call 发给主（修复前：连上就发，主会当未认证连接断掉）",
+        iHello >= 0 && (iCall < 0 || iCall > iHello),
+        JSON.stringify(got.map((m) => m.type))
+      );
+    }
   }
   S.kill();
   owner.close();
@@ -748,7 +767,7 @@ console.log("\n\x1b[1mP4-2c 工具管线：截图落盘 / 参数不过桥 / 探�
   check("inline+outFile 同给时也真的落了盘（修复前 outFile 被静默忽略）", fs.existsSync(shot), shot);
   check(
     "落盘路径回给了调用方（否则「存哪了」没人答得上来）",
-    JSON.stringify(r?.result?.content || []).includes(shot),
+    (r?.result?.content || []).some((c) => (c.text || "").includes(JSON.stringify(shot).slice(1, -1))),
     JSON.stringify(kinds)
   );
   const shotCall = host.calls().filter((c) => c.tool === "screenshot").pop();

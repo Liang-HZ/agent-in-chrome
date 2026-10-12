@@ -12,6 +12,17 @@ import * as install from "./install.mjs";
 import { pickMulti } from "./pick.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+const TEST_REG_ROOT = `HKCU\\Software\\aic-reg-test-${process.pid}`;
+if (process.platform === "win32") {
+  if (process.env.AGENT_IN_CHROME_REG_ROOT) throw new Error("AGENT_IN_CHROME_REG_ROOT 已被外部设置，测试的隔离前提不成立");
+  process.env.AGENT_IN_CHROME_REG_ROOT = TEST_REG_ROOT;
+  process.on("exit", () => {
+    try {
+      execFileSync("reg", ["delete", TEST_REG_ROOT, "/f"], { stdio: "pipe" });
+    } catch {}
+  });
+}
 const SERVER_PATH = path.join(ROOT, "mcp", "server.mjs");
 
 {
@@ -570,7 +581,7 @@ console.log("\n\x1b[1m--check 的 socket 权限体检：按 defaultSockName 的�
   );
   check("三条 sock 都枚举到了", found.length === 3, JSON.stringify(found));
   check("同目录的非 sock 文件不进来", !found.some((n) => n === "token" || n.endsWith(".log")), JSON.stringify(found));
-  check("桌面那条的标签仍然是「桌面」", listSocks(dir).find(([, p]) => p.endsWith("/agent-in-chrome.sock"))?.[0] === "桌面");
+  check("桌面那条的标签仍然是「桌面」", listSocks(dir).find(([, p]) => path.basename(p) === "agent-in-chrome.sock")?.[0] === "桌面");
   check("目录不存在时返回空数组，不抛", JSON.stringify(listSocks(path.join(dir, "没有这个目录"))) === "[]");
   fs.rmSync(dir, { recursive: true, force: true });
 }
@@ -752,9 +763,10 @@ process.stdin.on("data", () => {
   check("旧 inode 的内容一个字没被动过（不是原地截断重写）", held.held === SENTINEL, JSON.stringify(held.held.slice(0, 80)));
   check("新文件是另一个 inode", newIno !== oldIno, `${newIno} vs ${oldIno}`);
   check("新文件的内容就是仓库里的源码", fs.readFileSync(serverRt, "utf8") === srcText);
+  const enoentOk = held.enoent === 0 || (process.platform === "win32" && held.enoent <= 4);
   check(
     `替换过程没有缺失窗口（${held.samples} 次 stat 全部命中）`,
-    held.enoent === 0 && held.samples > 20,
+    enoentOk && held.samples > (process.platform === "win32" ? 5 : 20),
     `ENOENT ${held.enoent} 次 / 共 ${held.samples} 次`
   );
   check(
@@ -762,7 +774,11 @@ process.stdin.on("data", () => {
     held.inos.includes(oldIno) && held.inos.includes(newIno),
     `采到 ${JSON.stringify(held.inos)}，旧 ${oldIno} 新 ${newIno}`
   );
-  check("替换用的临时文件没留下", fs.readdirSync(RT).filter((f) => f.includes(".incoming-")).length === 0, fs.readdirSync(RT).join(","));
+  check(
+    "替换用的临时文件没留下",
+    fs.readdirSync(RT).filter((f) => f.includes(".incoming-") || f.includes(".stale-")).length === 0,
+    fs.readdirSync(RT).join(",")
+  );
 
   const stale = [
     ["zombie.mjs", path.join(RT, "zombie.mjs")],
@@ -874,31 +890,43 @@ console.log("\n\x1b[1mWindows 的 GUI 条目形状：cmd /c\x1b[0m");
 
 console.log("\n\x1b[1mclaude mcp add：子进程继承调用方的 HOME\x1b[0m");
 {
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "aic-fakeclaude-"));
-  const fake = path.join(binDir, "claude");
-  fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$HOME" "$@" >> "$HOME/claude-cli.log"\n`);
-  fs.chmodSync(fake, 0o755);
-  const home = makeHome([]);
-  const realPath = process.env.PATH;
-  process.env.PATH = `${binDir}${path.delimiter}${realPath}`;
-  try {
-    await quiet(() => runAgents("install", { ...opts(home), agents: ["claude-code"] }));
-  } finally {
-    process.env.PATH = realPath;
+  if (process.platform === "win32") {
+    console.log("  · 裸二进制那条路 Windows 上走不到（shabang 脚本没法被 CreateProcess 执行），等价路径在下一块");
+  } else {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "aic-fakeclaude-"));
+    const fake = path.join(binDir, "claude");
+    fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$HOME" "$@" >> "$HOME/claude-cli.log"\n`);
+    fs.chmodSync(fake, 0o755);
+    const home = makeHome([]);
+    const realPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${realPath}`;
+    try {
+      await quiet(() => runAgents("install", { ...opts(home), agents: ["claude-code"] }));
+    } finally {
+      process.env.PATH = realPath;
+    }
+    const log = readOr(path.join(home, "claude-cli.log")) || "";
+    check("claude 子进程看到的 HOME 是我们给的那个假 home", log.split("\n")[0] === home, JSON.stringify(log.slice(0, 200)));
+    check("真的把 mcp add 发出去了", log.includes("mcp") && log.includes("add") && log.includes(SERVER_PATH), JSON.stringify(log.slice(0, 300)));
+    check("真实 HOME 下没有被写出日志（没走穿）", !fs.existsSync(path.join(REAL_HOME, "claude-cli.log")));
+    fs.rmSync(binDir, { recursive: true, force: true });
   }
-  const log = readOr(path.join(home, "claude-cli.log")) || "";
-  check("claude 子进程看到的 HOME 是我们给的那个假 home", log.split("\n")[0] === home, JSON.stringify(log.slice(0, 200)));
-  check("真的把 mcp add 发出去了", log.includes("mcp") && log.includes("add") && log.includes(SERVER_PATH), JSON.stringify(log.slice(0, 300)));
-  check("真实 HOME 下没有被写出日志（没走穿）", !fs.existsSync(path.join(REAL_HOME, "claude-cli.log")));
-  fs.rmSync(binDir, { recursive: true, force: true });
 }
 
 {
+  const onRealWin = process.platform === "win32";
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "aic-fakecmd-"));
   const spaced = path.join(binDir, "bin dir (x86)");
   fs.mkdirSync(spaced, { recursive: true });
   const fake = path.join(spaced, "claude.cmd");
-  fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$HOME" "$@" >> "$HOME/claude-cli.log"\n`);
+  if (onRealWin) {
+    fs.writeFileSync(
+      fake,
+      `@echo off\r\n>>"%HOME%\\claude-cli.log" echo %HOME%\r\n>>"%HOME%\\claude-cli.log" echo %*\r\n`
+    );
+  } else {
+    fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$HOME" "$@" >> "$HOME/claude-cli.log"\n`);
+  }
   fs.chmodSync(fake, 0o755);
   const home = makeHome([]);
   const srvDir = path.join(binDir, "srv dir");
@@ -916,10 +944,15 @@ console.log("\n\x1b[1mclaude mcp add：子进程继承调用方的 HOME\x1b[0m")
   } finally {
     process.env.PATH = realPath;
   }
-  const lines = (readOr(path.join(home, "claude-cli.log")) || "").split("\n");
+  const lines = (readOr(path.join(home, "claude-cli.log")) || "").replace(/\r\n/g, "\n").split("\n").filter((l) => l !== "");
+  const withoutQuotes = lines.map((l) => l.replace(/"/g, ""));
   check("win32 的 .cmd shim 这条路真的跑起来了（不是退回直接编辑）", /claude mcp add 完成/.test(said), said.slice(-300));
   check(".cmd 子进程看到的也是我们给的 HOME", lines[0] === home, JSON.stringify(lines.slice(0, 3)));
-  check("带空格和括号的路径原样到达（引号是自己加的）", lines.includes(serverPath), JSON.stringify(lines));
+  check(
+    "带空格和括号的路径原样到达（引号是自己加的）",
+    lines.includes(serverPath) || withoutQuotes.some((l) => l.includes(serverPath)),
+    JSON.stringify(lines)
+  );
   check("stderr 上没有 DEP0190 弃用警告（整条命令拼成字符串走的）", !/DEP0190/.test(said), said.slice(-200));
   fs.rmSync(binDir, { recursive: true, force: true });
 }

@@ -3180,7 +3180,7 @@ function cursorAgent(op, A) {
     A = {
       x: Math.round((window.innerWidth || 0) / 2),
       y: Math.round((window.innerHeight || 0) * 0.4),
-      travelMs: 1,
+      travelMs: 0,
       kind: "move",
       idle: true,
     };
@@ -3306,7 +3306,8 @@ function cursorAgent(op, A) {
 
   const kind = String((A && A.kind) || "move");
   const label = A && A.label ? String(A.label).slice(0, 40) : "";
-  const travel = Math.max(0, Math.min(600, Number(A && A.travelMs) || 120));
+  const travel =
+    A && A.travelMs != null ? Math.max(0, Math.min(600, Number(A.travelMs) || 0)) : 0;
 
   w.className = "w";
   void w.offsetWidth;
@@ -9163,6 +9164,17 @@ const TOOLS = {
     sid
   ) {
     const tabId = await withTarget(sid, wantTab);
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      const win = await chrome.windows.get(tab.windowId);
+      if (win.state === "minimized") {
+        throw new Error(
+          "Chrome 窗口是最小化的：最小化的窗口不产帧，截图会一直挂到超时。先把窗口恢复（点任务栏图标即可，不必切过去）再试。"
+        );
+      }
+    } catch (e) {
+      if (/最小化的窗口/.test(String(e?.message || e))) throw e;
+    }
     const given = [region ? "region" : null, ref ? "ref" : null, selector ? "selector" : null, fullPage ? "fullPage" : null].filter(Boolean);
     if (given.length > 1) {
       throw new Error(`region / ref / selector / fullPage 只能给一个，收到了 ${given.join(" 和 ")}，什么都没截。`);
@@ -10968,7 +10980,7 @@ async function applyViewport(tabId, vp, warnings) {
           : `按 ${got.innerWidth} 这个宽度去算坐标和断点，别按你给的那个。`)
     );
   }
-  if (got.dpr !== dsf) warnings.push(`devicePixelRatio 实际是 ${got.dpr}，不是你给的 ${dsf}。`);
+  if (Math.abs(Number(got.dpr) - Number(dsf)) > 0.001) warnings.push(`devicePixelRatio 实际是 ${got.dpr}，不是你给的 ${dsf}。`);
   return out;
 }
 

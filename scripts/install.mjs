@@ -51,6 +51,7 @@ const RUNTIME_DIR = path.join(DATA_DIR, "agent-in-chrome");
 const HOST_SRC = path.join(ROOT, "native-host", "host.mjs");
 const FG_SWIFT_SRC = path.join(ROOT, "native-host", "mac-foreground", "aic-fg.swift");
 const SERVER_SRC = path.join(ROOT, "mcp", "server.mjs");
+const BIN_SRC = path.join(ROOT, "bin", "agent-in-chrome.mjs");
 const HOST_PATH = path.join(RUNTIME_DIR, "host.mjs");
 const SERVER_PATH = path.join(RUNTIME_DIR, "server.mjs");
 const MCP_DIR = path.join(ROOT, "mcp");
@@ -75,7 +76,7 @@ function scanDeps(entryAbs, out = new Set()) {
   }
   return out;
 }
-const SERVER_DEPS = [...scanDeps(SERVER_SRC, scanDeps(HOST_SRC))].sort();
+const SERVER_DEPS = [...scanDeps(SERVER_SRC, scanDeps(HOST_SRC, scanDeps(BIN_SRC)))].sort();
 const EXT_FILES = ["sw.js", "manifest.json"];
 const EXT_STABLE_DIR = path.join(DATA_DIR, "extension");
 const IS_GIT_CHECKOUT = fs.existsSync(path.join(ROOT, ".git"));
@@ -286,6 +287,13 @@ function checkStrayBrowsers() {
  *   映射都指向被替换掉的那个 inode，不会读到半截新文件；
  *   也从不「原地截断重写」一个可能正被读取或执行的文件。
  * 同目录是硬要求：跨设备的 rename 会 EXDEV，而 os.tmpdir() 在很多机器上是另一个卷。
+ *
+ * Windows 上 rename 盖不到一个正被别的进程打开着的目标（NTFS 没有「替换已打开
+ * 文件」的 POSIX 语义，rename 报 EPERM）。这时走「让位舞步」：旧文件先改名让位——
+ * 它自己的打开句柄跟着旧名字走，内容一个字节不动；新文件立刻顶上原名；旧名字
+ * 尽力而为地删（被握着时是 delete-pending，握着它的进程一退出系统才真删）。
+ * 代价是两次 rename 之间有几微秒的 ENOENT 窗口，只在「目标正被握着」这一种
+ * 情形付出；常规升级（没人握着）仍然走上面的单次 rename，一个窗口都没有。
  */
 function replaceAtomically(from, to, mode = 0o644) {
   fs.mkdirSync(path.dirname(to), { recursive: true });
@@ -294,12 +302,38 @@ function replaceAtomically(from, to, mode = 0o644) {
   if (!WIN) fs.chmodSync(tmp, mode);
   try {
     fs.renameSync(tmp, to);
+    return;
   } catch (e) {
+    if (!WIN || !["EPERM", "EACCES", "EBUSY"].includes(e.code)) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {}
+      throw e;
+    }
+  }
+  const stale = `${to}.stale-${process.pid}`;
+  try {
+    fs.renameSync(to, stale);
+  } catch (e2) {
     try {
       fs.unlinkSync(tmp);
     } catch {}
-    throw e;
+    throw e2;
   }
+  try {
+    fs.renameSync(tmp, to);
+  } catch (e3) {
+    try {
+      fs.renameSync(stale, to);
+    } catch {}
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
+    throw e3;
+  }
+  try {
+    fs.unlinkSync(stale);
+  } catch {}
 }
 
 function runtimeManifest() {
@@ -317,6 +351,7 @@ function sweepRuntime(keep) {
   const owned = (rel, name) =>
     name.endsWith(".mjs") ||
     /\.incoming-\d+$/.test(name) ||
+    /\.stale-\d+$/.test(name) ||
     rel.split(path.sep)[0] === "extension";
   const walk = (dir, rel) => {
     let ents;

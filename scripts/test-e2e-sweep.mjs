@@ -232,8 +232,13 @@ process.stdin.on("data", (c) => {
 });
 `
   );
-  const launcher = path.join(tmp, "launcher.sh");
-  fs.writeFileSync(launcher, `#!/bin/sh\nexec ${process.execPath} ${stub} "$@"\n`);
+  const onRealWin = process.platform === "win32";
+  const launcher = path.join(tmp, onRealWin ? "launcher.bat" : "launcher.sh");
+  if (onRealWin) {
+    fs.writeFileSync(launcher, `@echo off\r\n"${process.execPath}" "${stub}" %*\r\n`);
+  } else {
+    fs.writeFileSync(launcher, `#!/bin/sh\nexec ${process.execPath} ${stub} "$@"\n`);
+  }
   fs.chmodSync(launcher, 0o755);
   const env = { ...process.env, AGENT_IN_CHROME_E2E_LAUNCHER: launcher, AGENT_IN_CHROME_SOCK: path.join(tmp, "s.sock") };
   const dry = spawnSync(process.execPath, [path.join(HERE, "e2e-sweep.mjs"), "--dry-run"], { encoding: "utf8", env, timeout: 30000 });

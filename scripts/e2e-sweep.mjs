@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { defaultMcpLauncher, spawnMcpLauncher } from "./launcher-spawn.mjs";
 
 export const E2E_PREFIX = "e2e-";
 
@@ -69,9 +69,8 @@ function pidAlive(pid) {
 
 function sweepClient(sessionId) {
   const launcher =
-    process.env.AGENT_IN_CHROME_E2E_LAUNCHER ||
-    path.join(os.homedir(), ".agent-in-chrome", "agent-in-chrome", "mcp-launcher.sh");
-  const p = spawn(launcher, [], {
+    process.env.AGENT_IN_CHROME_E2E_LAUNCHER || defaultMcpLauncher();
+  const p = spawnMcpLauncher(launcher, {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, AGENT_IN_CHROME_SESSION_ID: sessionId },
   });

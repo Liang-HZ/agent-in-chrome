@@ -12,6 +12,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { zipDir } from "./release/zip.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXT_DIR = path.join(ROOT, "extension");
@@ -42,7 +43,7 @@ const version = JSON.parse(fs.readFileSync(path.join(EXT_DIR, "manifest.json"), 
 
 const zipPath = path.join(OUT_DIR, "extension.zip");
 fs.rmSync(zipPath, { force: true });
-execFileSync("/usr/bin/zip", ["-r", "-X", "-q", zipPath, "."], { cwd: EXT_DIR });
+zipDir(zipPath, { cwd: EXT_DIR });
 const zip = fs.readFileSync(zipPath);
 
 const pubDer = crypto.createPublicKey(fs.readFileSync(KEY)).export({ type: "spki", format: "der" });

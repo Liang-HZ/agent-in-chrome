@@ -29,6 +29,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { scriptCmd, checkCmd, reinstallCmd } from "../mcp/cli-invocation.mjs";
+import { launcherNeedsShell, cmdq } from "./launcher-spawn.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -394,13 +395,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function bridgeServerCmd() {
   const override = process.env.AGENT_IN_CHROME_BORROW_SERVER;
   if (override) return override.endsWith(".mjs") ? [process.execPath, [override]] : [override, []];
-  const installed = path.join(os.homedir(), ".agent-in-chrome", "agent-in-chrome", "mcp-launcher.sh");
+  const installed = path.join(os.homedir(), ".agent-in-chrome", "agent-in-chrome", process.platform === "win32" ? "mcp-launcher.bat" : "mcp-launcher.sh");
   if (fs.existsSync(installed)) return [installed, []];
   return [process.execPath, [path.join(ROOT, "mcp", "server.mjs")]];
 }
 
 function mcpClient(cmd, args, env, label) {
-  const p = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], env });
+  const p =
+    launcherNeedsShell(cmd)
+      ? spawn(cmdq(cmd), { stdio: ["pipe", "pipe", "pipe"], env, shell: true, windowsHide: true })
+      : spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], env });
   let errText = "";
   p.stderr.setEncoding("utf8");
   p.stderr.on("data", (c) => {

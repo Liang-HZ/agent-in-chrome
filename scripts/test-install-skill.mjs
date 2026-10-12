@@ -204,7 +204,9 @@ console.log("\n\x1b[1m旗标解析\x1b[0m");
 
 console.log("\n\x1b[1mlauncher 条目的形状：print-config 与 agents.mjs 是同一份\x1b[0m");
 {
-  const trae = buildAgents({ serverPath: facts.serverPath, mcpLauncher: facts.mcp.launcher.command }).find((a) => a.id === "trae");
+  const launcherPath =
+    process.platform === "win32" ? facts.mcp.launcher.args[facts.mcp.launcher.args.length - 1] : facts.mcp.launcher.command;
+  const trae = buildAgents({ serverPath: facts.serverPath, mcpLauncher: launcherPath }).find((a) => a.id === "trae");
   const entry = JSON.parse(trae.preview.join("\n")).mcpServers["agent-in-chrome"];
   check(
     "print-config 的 mcp.launcher 和 agents.mjs 写给 GUI 客户端的条目一致",
@@ -285,7 +287,7 @@ console.log("\n\x1b[1m文档漂移：README / docs 里的 npx 子命令都得存
 console.log("\n\x1b[1mskill 与 command 的形状\x1b[0m");
 {
   const frontmatter = (text) => {
-    const lines = text.split("\n");
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
     if (lines[0].trim() !== "---") return null;
     const end = lines.indexOf("---", 1);
     if (end === -1) return null;
