@@ -392,6 +392,27 @@ function syncRuntime() {
   return sweepRuntime(new Set(manifest.map(([rel]) => rel)));
 }
 
+export function runtimeDrift(manifest = runtimeManifest(), runtimeDir = RUNTIME_DIR) {
+  const out = [];
+  for (const [rel, src] of manifest) {
+    let srcBuf;
+    try {
+      srcBuf = fs.readFileSync(src);
+    } catch {
+      continue;
+    }
+    let dstBuf;
+    try {
+      dstBuf = fs.readFileSync(path.join(runtimeDir, rel));
+    } catch {
+      out.push({ rel, why: "missing" });
+      continue;
+    }
+    if (!srcBuf.equals(dstBuf)) out.push({ rel, why: "differ" });
+  }
+  return out;
+}
+
 // Chrome 和 agent 桌面端都是 GUI 应用，PATH 里没有 nvm / homebrew 的 node——
 // `#!/usr/bin/env node` 在它们手里必然 ENOENT。所以到处都必须写绝对路径。
 // 用跑安装脚本的这个 node（process.execPath 是绝对路径），不依赖调用方的 PATH。
@@ -873,8 +894,18 @@ function doMcp() {
     else if (!WIN && !(fs.statSync(MCP_LAUNCHER).mode & 0o111)) bad("MCP 启动器没有可执行位");
     else ok(`启动器: ${MCP_LAUNCHER}`);
     const missing = SERVER_DEPS.filter((d) => !fs.existsSync(path.join(RUNTIME_DIR, d)));
-    if (missing.length) bad(`运行时缺少 server.mjs 依赖的模块：${missing.join(", ")}，跑 ${REINSTALL_CMD} 重装`);
-    else ok(`server 依赖模块齐全（${SERVER_DEPS.join(", ")}）`);
+    if (missing.length) {
+      bad(`运行时缺少 server.mjs 依赖的模块：${missing.join(", ")}，跑 ${REINSTALL_CMD} 重装`);
+    } else {
+      ok(`server 依赖模块齐全（${SERVER_DEPS.join(", ")}）`);
+      const drift = runtimeDrift(runtimeManifest().filter(([rel]) => !String(rel).startsWith("extension")));
+      if (drift.length)
+        bad(
+          `运行时与源码不一致：${drift
+            .map((d) => `${d.rel}（${d.why === "missing" ? "缺" : "内容不同"}）`)
+            .join("、")}，跑 ${REINSTALL_CMD} 同步`
+        );
+    }
     smokeTestRuntime();
     checkStrayBrowsers();
     const extMissing = EXT_FILES.filter((f) => !fs.existsSync(path.join(RUNTIME_DIR, "extension", f)));

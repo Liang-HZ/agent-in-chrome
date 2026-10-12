@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getToken, bridgeEndpoint } from "../mcp/token.mjs";
+import { getToken, bridgeEndpoint, handshakeNonce, handshakeProof, timingSafeEqualStr } from "../mcp/token.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "agent-in-chrome-proto-"));
@@ -794,6 +794,107 @@ console.log("\n\x1b[1m11c. 更新版本的从连上来：老主让位，在飞�
   O.p.kill();
   N.p.kill();
   P.p.kill();
+}
+
+console.log("\n\x1b[1mN. host 启动竞态：扩展的 hello 不许抢跑成第一行\x1b[0m");
+{
+  const dir = path.join(TMP, "hostgate");
+  fs.mkdirSync(dir, { recursive: true });
+  const sock = path.join(dir, "t.sock");
+  const token = getToken(dir);
+  const snonce = handshakeNonce();
+  const lines = [];
+  let host = null;
+  let injected = false;
+  const chromeFrame = (obj) => {
+    const b = Buffer.from(JSON.stringify(obj), "utf8");
+    const h = Buffer.alloc(4);
+    h.writeUInt32LE(b.length, 0);
+    return Buffer.concat([h, b]);
+  };
+  const fakeMaster = net.createServer((c) => {
+    c.setEncoding("utf8");
+    c.on("error", () => {});
+    let authed = false;
+    let buf = "";
+    c.on("data", (chunk) => {
+      buf += chunk;
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        let m;
+        try {
+          m = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        lines.push(m);
+        if (!authed) {
+          const roleOk = m.type === "hello" && (m.role === "host" || m.role === "peer");
+          const proofOk =
+            roleOk &&
+            typeof m.proof === "string" &&
+            timingSafeEqualStr(m.proof, handshakeProof(token, "client", snonce, m.nonce || ""));
+          if (!proofOk) {
+            c.write(
+              JSON.stringify({ type: "error", code: "unauthorized", message: "（假主）第一行必须是 hello(host/peer)+proof" }) + "\n",
+              () => c.destroy()
+            );
+            return;
+          }
+          authed = true;
+          c.write(JSON.stringify({ type: "welcome", proof: handshakeProof(token, "server", snonce, m.nonce) }) + "\n");
+        }
+      }
+    });
+    if (host && !injected) {
+      injected = true;
+      host.stdin.write(chromeFrame({ type: "hello", role: "extension", version: "9.9.9-gate", bootedAt: 42 }));
+    }
+    setTimeout(() => c.write(JSON.stringify({ type: "challenge", v: 1, nonce: snonce }) + "\n"), 200);
+  });
+  fakeMaster.listen(ep(sock));
+  await until(() => sockUp(sock));
+
+  const hostHome = path.join(TMP, "hostgate-home");
+  fs.mkdirSync(path.join(hostHome, ".agent-in-chrome"), { recursive: true });
+  const hostLog = path.join(hostHome, ".agent-in-chrome", "agent-in-chrome-host.log");
+  host = spawn(process.execPath, [path.join(ROOT, "native-host", "host.mjs")], {
+    env: { ...process.env, AGENT_IN_CHROME_SOCK: sock, HOME: hostHome, USERPROFILE: hostHome },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  await until(() => lines.length >= 2, 6000);
+  await sleep(150);
+  check(
+    "host 的第一行永远是它自己的 hello（带 proof），不是扩展的帧",
+    lines[0]?.type === "hello" && lines[0]?.role === "host" && typeof lines[0]?.proof === "string",
+    JSON.stringify(lines[0])
+  );
+  check(
+    "扩展 hello 没有丢：握手走完按原顺序补发到了第二行",
+    lines[1]?.type === "hello" && lines[1]?.role === "extension" && lines[1]?.version === "9.9.9-gate",
+    JSON.stringify(lines[1])
+  );
+  await until(() => {
+    try {
+      return fs.readFileSync(hostLog, "utf8").includes("host 启动");
+    } catch {
+      return false;
+    }
+  }, 3000);
+  await sleep(1600);
+  let logText = "";
+  try {
+    logText = fs.readFileSync(hostLog, "utf8");
+  } catch {}
+  check("host 日志里没有「agent 拒绝了我们的令牌」", !logText.includes("agent 拒绝了我们的令牌"), logText.slice(0, 300));
+  check("host 一次就握上了（「已连上 agent」只出现一次）", (logText.match(/已连上 agent/g) || []).length === 1, logText.slice(0, 300));
+
+  host.kill();
+  fakeMaster.close();
 }
 
 console.log(failed ? `\n\x1b[31m${passed} 通过, ${failed} 失败\x1b[0m` : `\n\x1b[32m${passed} 通过, ${failed} 失败\x1b[0m`);

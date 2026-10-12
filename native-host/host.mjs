@@ -138,6 +138,9 @@ function authToken() {
 let sock = null;
 let sockBuf = "";
 let reconnectTimer = null;
+let outboundReady = false;
+let outboundQueue = [];
+const OUTBOUND_QUEUE_MAX = 64;
 let lastExtHello = null;
 let authWarned = false;
 
@@ -156,6 +159,12 @@ function toAgent(obj) {
   } catch (e) {
     log("写 socket 失败:", e.message);
     return false;
+  }
+}
+
+function flushOutbound() {
+  while (outboundReady && outboundQueue.length && sock && !sock.destroyed) {
+    if (!toAgent(outboundQueue.shift())) break;
   }
 }
 
@@ -203,6 +212,10 @@ function connectSocket() {
     if (sock !== s) return;
     if (!toAgent(frame)) return;
     if (lastExtHello) toAgent(lastExtHello);
+    if (LEGACY_TOKEN_HELLO_OK) {
+      outboundReady = true;
+      flushOutbound();
+    }
   };
   let dropWarned = false;
 
@@ -220,6 +233,7 @@ function connectSocket() {
   s.on("connect", () => {
     sock = s;
     sockBuf = "";
+    outboundReady = false;
     flushDropRepeats();
     lastDropWhy = null;
     reconnectDelay = RECONNECT_MS;
@@ -261,6 +275,8 @@ function connectSocket() {
           impostor = true;
           drop("对面拿不出反向证明：占着这个端点的不是主（令牌没有发出去）");
         }
+        outboundReady = true;
+        flushOutbound();
         continue;
       }
       if (msg.type === "error" && msg.code === "unauthorized") {
@@ -292,6 +308,7 @@ function connectSocket() {
     dropped = true;
     clearTimeout(hsTimer);
     if (sock === s) sock = null;
+    outboundReady = false;
     s.destroy();
     noteDrop(why);
     notifyAgentLink(false);
@@ -342,6 +359,17 @@ function onFromExtension(msg) {
     } catch (e) {
       toChrome({ type: "config-result", id: msg.id, ok: false, error: String(e?.message || e) });
     }
+    return;
+  }
+  if (sock && !sock.destroyed && !outboundReady) {
+    if (outboundQueue.length >= OUTBOUND_QUEUE_MAX) {
+      const stale = outboundQueue.shift();
+      log(
+        `握手未完成，出站积压超过 ${OUTBOUND_QUEUE_MAX} 条，丢弃最早的一帧:`,
+        stale.type || "无 type"
+      );
+    }
+    outboundQueue.push(msg);
     return;
   }
   if (!toAgent(msg)) {

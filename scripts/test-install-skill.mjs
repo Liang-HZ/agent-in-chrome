@@ -376,5 +376,38 @@ console.log("\n\x1b[1mregistered 字段真的在读文件\x1b[0m");
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+console.log("\n\x1b[1m运行时内容漂移：runtimeDrift 只认字节，不认 mtime\x1b[0m");
+{
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+  const codeManifest = [
+    ["host.mjs", path.join(ROOT, "native-host", "host.mjs")],
+    ["server.mjs", path.join(ROOT, "mcp", "server.mjs")],
+    ["token.mjs", path.join(ROOT, "mcp", "token.mjs")],
+  ];
+  for (const [rel, src] of codeManifest) fs.copyFileSync(src, path.join(RUNTIME_DIR, rel));
+  check("逐字节一致 → 无漂移", install.runtimeDrift(codeManifest, RUNTIME_DIR).length === 0, JSON.stringify(install.runtimeDrift(codeManifest, RUNTIME_DIR)));
+
+  fs.appendFileSync(path.join(RUNTIME_DIR, "server.mjs"), "\n");
+  const drifted = install.runtimeDrift(codeManifest, RUNTIME_DIR);
+  check(
+    "改了内容 → differ，且只点名单上的那一个",
+    drifted.length === 1 && drifted[0].rel === "server.mjs" && drifted[0].why === "differ",
+    JSON.stringify(drifted)
+  );
+
+  fs.rmSync(path.join(RUNTIME_DIR, "token.mjs"));
+  const missing = install.runtimeDrift(codeManifest, RUNTIME_DIR);
+  check("缺文件 → missing", missing.some((d) => d.rel === "token.mjs" && d.why === "missing"), JSON.stringify(missing));
+
+  const withPhantom = [...codeManifest, ["ghost.mjs", path.join(RUNTIME_DIR, "definitely-not-here.mjs")]];
+  check(
+    "源文件读不到的条目直接跳过",
+    install.runtimeDrift(withPhantom, RUNTIME_DIR).every((d) => d.rel !== "ghost.mjs"),
+    JSON.stringify(install.runtimeDrift(withPhantom, RUNTIME_DIR))
+  );
+
+  fs.rmSync(RUNTIME_DIR, { recursive: true, force: true });
+}
+
 console.log(`\n${failed ? "\x1b[31m" : "\x1b[32m"}${passed} 通过，${failed} 失败\x1b[0m\n`);
 process.exit(failed ? 1 : 0);
