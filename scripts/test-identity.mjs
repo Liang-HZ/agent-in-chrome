@@ -15,6 +15,7 @@ import {
   isDshClient,
   decodeZstdFrames,
   readDshSession,
+  readDshSubagent,
   antigravityDataDir,
   antigravityConversationId,
   readAntigravityWorkspace,
@@ -744,15 +745,15 @@ console.log("\n\x1b[1m标题的取用顺序：先协议级（_meta），后本�
   setSqliteColumn(() => ["协议级认到的名字"]);
   check(
     "_meta 报了会话身份时，用它，不用本机取证那条",
-    readSessionTitle(local, { home, meta: { session_id: "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4" } }) === "协议级认到的名字"
+    readSessionTitle(local, { home, env: {}, meta: { session_id: "sess_0a33b40d-8caa-431f-8d42-ca951e3366f4" } }) === "协议级认到的名字"
   );
   setSqliteColumn(null);
   resetTitleMemo();
-  check("没有 _meta 的客户端行为一字不变", readSessionTitle(local, { home, exec: () => { throw new Error("不该查库"); } }) === "本机取证认到的名字");
+  check("没有 _meta 的客户端行为一字不变", readSessionTitle(local, { home, env: {}, exec: () => { throw new Error("不该查库"); } }) === "本机取证认到的名字");
   resetTitleMemo();
   check(
     "Qoder 那种一个 _meta 字段都不发的，走回原来的路（不猜）",
-    readSessionTitle(local, { home, exec: () => { throw new Error("不该查库"); }, meta: { progressToken: 1 } }) === "本机取证认到的名字"
+    readSessionTitle(local, { home, env: {}, exec: () => { throw new Error("不该查库"); }, meta: { progressToken: 1 } }) === "本机取证认到的名字"
   );
   fs.rmSync(home, { recursive: true, force: true });
 }
@@ -795,10 +796,11 @@ if (typeof zlib.zstdCompressSync !== "function") {
     for (const s of sessions) {
       const dir = path.join(home, ".dsh", "sessions", "--proj--", s.id);
       fs.mkdirSync(dir, { recursive: true });
-      const lines = [ev({ type: "session", version: 0, id: s.id, createdAt: 1, cwd: s.cwd, delegationDepth: 0 })];
+      const lines = [ev({ type: "session", version: 0, id: s.id, createdAt: 1, cwd: s.cwd, delegationDepth: 0, ...(s.header || {}) })];
       let seq = 10;
+      for (const e of s.extra || []) lines.push(ev({ seq: seq++, ...e }));
       for (const [kind, title] of s.titles || []) lines.push(ev({ type: "session/title", seq: seq++, data: { title, source: { kind } } }));
-      const f = path.join(dir, "session.jsonl.zstd");
+      const f = path.join(dir, s.file || "session.jsonl.zstd");
       fs.writeFileSync(f, frames(lines));
       if (s.ageMs) {
         const t = new Date(Date.now() - s.ageMs);
@@ -811,6 +813,10 @@ if (typeof zlib.zstdCompressSync !== "function") {
   check("isDshClient 认 npx/pnpm 的 bin shim", isDshClient(DSH_CMD));
   check("isDshClient 认包路径（全局装的形态）", isDshClient("node /usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js web"));
   check("别家的 node 进程不算 dsh", !isDshClient("node /Users/u/.workbuddy/daemon-app-server-entry.js"));
+  const DSH_APP_CMD =
+    "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness --expose-internals /Applications/DeepSeek Harness.app/Contents/Resources/app.asar";
+  check("isDshClient 认桌面端（DeepSeek Harness.app）", isDshClient(DSH_APP_CMD));
+  check("别的 Electron .app 不算 dsh", !isDshClient("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"));
 
   {
     const parts = frames(['{"a":1}', '{"b":2}', '{"c":3}']);
@@ -823,11 +829,11 @@ if (typeof zlib.zstdCompressSync !== "function") {
       { id: "session-11111111-1111-1111-1111-111111111111", cwd: "/Users/u/proj-a", titles: [["fallback", "你好"], ["provider", "调研杭州天气"]] },
     ]);
     resetTitleMemo();
-    const s = readDshSession(localFor(), { home });
+    const s = readDshSession(localFor(), { home, env: {} });
     check("一个活跃会话：归属成立，标题是 LLM 生成的那条", s?.title === "调研杭州天气", JSON.stringify(s));
     check("cwd 来自会话日志的 header", s?.cwd === "/Users/u/proj-a", JSON.stringify(s));
     resetTitleMemo();
-    check("拉起我们的不是 dsh 时一个字都不读", readDshSession(localFor("node /a/other.js"), { home }) === null);
+    check("拉起我们的不是 dsh 时一个字都不读", readDshSession(localFor("node /a/other.js"), { home, env: {} }) === null);
     fs.rmSync(home, { recursive: true, force: true });
   }
 
@@ -836,7 +842,7 @@ if (typeof zlib.zstdCompressSync !== "function") {
       { id: "session-22222222-2222-2222-2222-222222222222", cwd: "/Users/u/proj-b", titles: [["fallback", "帮我看看这个"]] },
     ]);
     resetTitleMemo();
-    const s = readDshSession(localFor(), { home });
+    const s = readDshSession(localFor(), { home, env: {} });
     check("fallback 标题不显示（同 ZCode 拒 first_input 的理由）", s !== null && s.title === null, JSON.stringify(s));
     check("标题缺席不拖累 cwd", s?.cwd === "/Users/u/proj-b", JSON.stringify(s));
     fs.rmSync(home, { recursive: true, force: true });
@@ -847,7 +853,7 @@ if (typeof zlib.zstdCompressSync !== "function") {
       { id: "session-33333333-3333-3333-3333-333333333333", cwd: "/x", titles: [["provider", "自动名"], ["user", "我改的名"]] },
     ]);
     resetTitleMemo();
-    check("用户改名后取最后一条", readDshSession(localFor(), { home })?.title === "我改的名");
+    check("用户改名后取最后一条", readDshSession(localFor(), { home, env: {} })?.title === "我改的名");
     fs.rmSync(home, { recursive: true, force: true });
   }
 
@@ -857,7 +863,7 @@ if (typeof zlib.zstdCompressSync !== "function") {
       { id: "session-55555555-5555-5555-5555-555555555555", cwd: "/y", titles: [["provider", "乙"]] },
     ]);
     resetTitleMemo();
-    check("两个活跃会话：null，不猜", readDshSession(localFor(), { home }) === null);
+    check("两个活跃会话：null，不猜", readDshSession(localFor(), { home, env: {} }) === null);
     fs.rmSync(home, { recursive: true, force: true });
   }
 
@@ -867,7 +873,161 @@ if (typeof zlib.zstdCompressSync !== "function") {
       { id: "session-77777777-7777-7777-7777-777777777777", cwd: "/y", titles: [["provider", "冷的"]], ageMs: 20 * 60_000 },
     ]);
     resetTitleMemo();
-    check("超出活跃窗口的旧会话不算，归属落在活的那个", readDshSession(localFor(), { home })?.title === "活的");
+    check("超出活跃窗口的旧会话不算，归属落在活的那个", readDshSession(localFor(), { home, env: {} })?.title === "活的");
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "11111111-1111-1111-1111-111111111111", cwd: "/Users/u/proj-x", file: "session.v4.jsonl.zstd", titles: [["provider", "桌面端的会话"]] },
+    ]);
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {} });
+    check(
+      "桌面端布局：不带前缀的目录 + session.v4.jsonl.zstd 也读得到",
+      s?.title === "桌面端的会话" && s?.cwd === "/Users/u/proj-x",
+      JSON.stringify(s)
+    );
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "aic-dsh-"));
+    const dir = path.join(home, ".dsh", "sessions", "--proj--", "session-22222222-2222-2222-2222-222222222222");
+    fs.mkdirSync(dir, { recursive: true });
+    const head = (cwd) => ev({ type: "session", version: 0, id: "s", createdAt: 1, cwd, delegationDepth: 0 });
+    const titled = (title) => ev({ type: "session/title", seq: 1, data: { title, source: { kind: "provider" } } });
+    fs.writeFileSync(path.join(dir, "session.v3.jsonl.zstd"), frames([head("/Users/u/old"), titled("旧格式")]));
+    fs.writeFileSync(path.join(dir, "session.v4.jsonl.zstd"), frames([head("/Users/u/new"), titled("当前格式")]));
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {} });
+    check("v3/v4 并存取版本号最高的那个", s?.title === "当前格式" && s?.cwd === "/Users/u/new", JSON.stringify(s));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "session-33333333-3333-3333-3333-333333333333", cwd: "/Users/u/proj", titles: [["provider", "真的对话"]] },
+      { id: "44444444-4444-4444-4444-444444444444", cwd: "/Users/u/proj", file: "session.v4.jsonl.zstd", extra: [{ type: "sandbox/mode", data: { mode: "workspace-write" } }] },
+      { id: "55555555-5555-5555-5555-555555555555", cwd: "/Users/u/proj", file: "session.v3.jsonl.zstd", extra: [{ type: "approval/policy", data: { policy: "ask" } }] },
+    ]);
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {} });
+    check("空壳会话被剔掉，归属落在真对话上", s?.title === "真的对话", JSON.stringify(s));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "session-66666666-6666-6666-6666-666666666666", cwd: "/Users/u/stub", file: "session.v4.jsonl.zstd", extra: [{ type: "sandbox/mode", data: { mode: "workspace-write" } }] },
+      { id: "session-77777777-7777-7777-7777-777777777777", cwd: "/Users/u/fresh", file: "session.v4.jsonl.zstd", extra: [{ type: "user/message", data: { content: [{ type: "text", text: "你好" }], source: { kind: "user" } } }] },
+    ]);
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {} });
+    check("还没标题但有用户输入的新对话算在对话里，空壳不算", s?.cwd === "/Users/u/fresh" && s?.title === null, JSON.stringify(s));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "session-88888888-8888-8888-8888-888888888888", cwd: "/x", file: "session.v4.jsonl.zstd", titles: [["provider", "甲"]] },
+      { id: "99999999-9999-9999-9999-999999999999", cwd: "/y", file: "session.v4.jsonl.zstd", titles: [["provider", "乙"]] },
+    ]);
+    resetTitleMemo();
+    check("两个都在对话：仍然 null，不猜", readDshSession(localFor(DSH_APP_CMD), { home, env: {} }) === null);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "session-aaaa1111-1111-1111-1111-111111111111", cwd: "/Users/u/a", file: "session.v4.jsonl.zstd", titles: [["provider", "甲"]] },
+      { id: "session-bbbb2222-2222-2222-2222-222222222222", cwd: "/Users/u/b", file: "session.v4.jsonl.zstd", titles: [["provider", "乙"]] },
+      { id: "session-cccc3333-3333-3333-3333-333333333333", cwd: "/Users/u/c", file: "session.v4.jsonl.zstd", titles: [["provider", "丙"]] },
+    ]);
+    resetTitleMemo();
+    check("三个活跃对话：没有 meta 时老口径仍然是 null", readDshSession(localFor(DSH_APP_CMD), { home, env: {} }) === null);
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {}, meta: { session_id: "session-bbbb2222-2222-2222-2222-222222222222" } });
+    check("_meta.session_id 直接定位，多个活跃也不影响", s?.title === "乙" && s?.cwd === "/Users/u/b", JSON.stringify(s));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "session-dddd4444-4444-4444-4444-444444444444", cwd: "/Users/u/d", file: "session.v4.jsonl.zstd", titles: [["provider", "丁"]] },
+    ]);
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {}, meta: { session_id: "../../etc/passwd" } });
+    check("带分隔符/走位的 id 不查盘，回落老口径", s?.title === "丁", JSON.stringify(s));
+    resetTitleMemo();
+    check("绝对路径形状同样拒绝", readDshSession(localFor(DSH_APP_CMD), { home, env: {}, meta: { session_id: "/etc/passwd" } })?.title === "丁");
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "session-main1111-1111-1111-1111-111111111111", cwd: "/Users/u/proj", file: "session.v4.jsonl.zstd", titles: [["provider", "主会话的名字"]] },
+      {
+        id: "session-sub22222-2222-2222-2222-222222222222",
+        cwd: "/Users/u/proj",
+        file: "session.v4.jsonl.zstd",
+        titles: [["provider", "委派提示词的开头四十个字"]],
+        header: { origin: "subagent", parentSession: "session-main1111-1111-1111-1111-111111111111", delegationDepth: 1 },
+      },
+    ]);
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {}, meta: { session_id: "session-sub22222-2222-2222-2222-222222222222" } });
+    check(
+      "subagent 上溯主会话：报主会话的标题与工作区",
+      s?.title === "主会话的名字" && s?.cwd === "/Users/u/proj" && s?.id === "session-main1111-1111-1111-1111-111111111111",
+      JSON.stringify(s)
+    );
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      {
+        id: "session-orphan11-1111-1111-1111-111111111111",
+        cwd: "/Users/u/only",
+        file: "session.v4.jsonl.zstd",
+        titles: [["provider", "孤儿子会话"]] ,
+        header: { origin: "subagent", parentSession: "session-gone9999-9999-9999-9999-999999999999", delegationDepth: 1 },
+      },
+    ]);
+    resetTitleMemo();
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {}, meta: { session_id: "session-orphan11-1111-1111-1111-111111111111" } });
+    check("父会话不见了就停在子会话，不返回空", s?.title === "孤儿子会话" && s?.cwd === "/Users/u/only", JSON.stringify(s));
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+
+  {
+    const home = makeDshHome([
+      { id: "session-pmain111-1111-1111-1111-111111111111", cwd: "/Users/u/repo", file: "session.v4.jsonl.zstd", titles: [["provider", "主会话名"]] },
+      {
+        id: "session-psub222-2222-2222-2222-222222222222",
+        cwd: "/Users/u/repo",
+        file: "session.v4.jsonl.zstd",
+        titles: [["fallback", "把标签页列出来"]],
+        header: { origin: "subagent", parentSession: "session-pmain111-1111-1111-1111-111111111111", delegationDepth: 1, agentPreset: "cordis" },
+      },
+    ]);
+    resetTitleMemo();
+    const subMeta = { session_id: "session-psub222-2222-2222-2222-222222222222" };
+    const s = readDshSession(localFor(DSH_APP_CMD), { home, env: {}, meta: subMeta });
+    check("会话名那行 = 主会话名", s?.title === "主会话名", JSON.stringify(s));
+    const t = readDshSubagent(subMeta, localFor(DSH_APP_CMD), { home, env: {} });
+    check("task 那行 = 子任务自己的名字（fallback 也认）", t?.label === "把标签页列出来", JSON.stringify(t));
+    check("taskType = 子会话的 preset", t?.type === "cordis", JSON.stringify(t));
+    resetTitleMemo();
+    check(
+      "主会话不发 task 这一行",
+      readDshSubagent({ session_id: "session-pmain111-1111-1111-1111-111111111111" }, localFor(DSH_APP_CMD), { home, env: {} }) === null
+    );
+    resetTitleMemo();
+    check("没有 _meta 就没有 task", readDshSubagent(null, localFor(DSH_APP_CMD), { home, env: {} }) === null);
+    check("不是 dsh 的客户端不查盘", readDshSubagent(subMeta, localFor("node /a/other.js"), { home, env: {} }) === null);
+    check("id 不存在就没有 task", readDshSubagent({ session_id: "session-nope0000-0000-0000-0000-000000000000" }, localFor(DSH_APP_CMD), { home, env: {} }) === null);
     fs.rmSync(home, { recursive: true, force: true });
   }
 
@@ -882,7 +1042,7 @@ if (typeof zlib.zstdCompressSync !== "function") {
       frames([ev({ type: "session", version: 0, id: "s", createdAt: 1, cwd: proj, delegationDepth: 0 }), ev({ type: "session/title", seq: 10, data: { title: "改注册器", source: { kind: "provider" } } })])
     );
     resetTitleMemo();
-    const idn = readSessionIdentity(localFor(), { home, tmp: path.join(home, "unused-tmp") });
+    const idn = readSessionIdentity(localFor(), { home, env: {}, tmp: path.join(home, "unused-tmp") });
     check("标题与工作区同源于同一段会话", idn.title === "改注册器" && idn.workspace === "my-cool-repo" && idn.workspaceKind === "git", JSON.stringify(idn));
     resetTitleMemo();
     const other = readSessionIdentity({ clientCommand: "node /a/b.js", clientPid: 1, hostSessionId: null, sessionName: null }, { home, env: {} });
@@ -1110,11 +1270,11 @@ console.log("\n\x1b[1mAntigravity：数据目录自报 + 会话库里的工作�
     fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
     writeRaw(home, `${ID}.db`, agBytes(ID, proj));
     resetTitleMemo();
-    const idn = readSessionIdentity(localFor(), { home, meta: metaFor(), env: {}, tmp: path.join(home, "unused-tmp") });
+    const idn = readSessionIdentity(localFor(), { home, env: {}, meta: metaFor(), env: {}, tmp: path.join(home, "unused-tmp") });
     check("readSessionIdentity 接上了：工作区来自会话库", idn.workspace === "ag-wired" && idn.workspaceKind === "git", JSON.stringify(idn));
     check("库里没有 steps 表时标题是 null，工作区照旧", idn.title === null, JSON.stringify(idn));
     resetTitleMemo();
-    const bare = readSessionIdentity(localFor(), { home, meta: { progressToken: "p1" }, tmp: path.join(home, "unused-tmp") });
+    const bare = readSessionIdentity(localFor(), { home, env: {}, meta: { progressToken: "p1" }, tmp: path.join(home, "unused-tmp") });
     check("同一个客户端、帧里没有会话 id 时不盖工作区", bare.workspace === null, JSON.stringify(bare));
     fs.rmSync(home, { recursive: true, force: true });
   }

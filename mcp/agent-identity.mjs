@@ -617,6 +617,8 @@ export function resetTitleMemo() {
   titleMemo.clear();
   dshCwdMemo.clear();
   agWsMemo.clear();
+  dshTalkMemo.clear();
+  dshHeaderMemo.clear();
 }
 
 // 顶层 await：只等一个内置模块的 import（微任务级），之后所有读库函数保持同步——
@@ -853,9 +855,15 @@ export function dshHome({ env = process.env, home = osMod.homedir() } = {}) {
   return path.isAbsolute(d) ? d : path.join(home, ".dsh");
 }
 
+const DSH_DESKTOP_APP = /DeepSeek Harness\.app[\\/]Contents[\\/]MacOS[\\/]/;
+
 export function isDshClient(clientCommand) {
   const s = String(clientCommand || "");
-  return /@deepseek-ai[\\/]dsh[\\/]/.test(s) || /[\\/]\.bin[\\/]dsh(\.cmd|\.exe|\.bat)?(\s|$)/.test(s);
+  return (
+    /@deepseek-ai[\\/]dsh[\\/]/.test(s) ||
+    /[\\/]\.bin[\\/]dsh(\.cmd|\.exe|\.bat)?(\s|$)/.test(s) ||
+    DSH_DESKTOP_APP.test(s)
+  );
 }
 
 export function decodeZstdFrames(buf, { zlib = zlibMod } = {}) {
@@ -875,13 +883,112 @@ export function decodeZstdFrames(buf, { zlib = zlibMod } = {}) {
 
 const dshCwdMemo = new Map();
 
+const DSH_LOG_NAME = /^session(?:\.v(\d+))?\.jsonl\.zstd$/;
+
+function dshLogFile(dir, fs = fsMod) {
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  let best = null;
+  let bestV = -1;
+  for (const n of names) {
+    const m = DSH_LOG_NAME.exec(n);
+    if (!m) continue;
+    const v = m[1] === undefined ? 0 : Number(m[1]);
+    if (v <= bestV) continue;
+    bestV = v;
+    best = path.join(dir, n);
+  }
+  return best;
+}
+
+const dshTalkMemo = new Map();
+
+function dshHasConversation(c, fs = fsMod) {
+  let key;
+  try {
+    const st = fs.statSync(c.file);
+    key = `${c.file}:${st.mtimeMs}:${st.size}`;
+  } catch {
+    return false;
+  }
+  const hit = dshTalkMemo.get(key);
+  if (hit !== undefined) return hit;
+  let ok = false;
+  try {
+    const text = decodeZstdFrames(fs.readFileSync(c.file));
+    ok = typeof text === "string" && (text.includes('"type":"user/message"') || text.includes('"type":"session/title"'));
+  } catch {
+    ok = false;
+  }
+  if (dshTalkMemo.size >= TITLE_MEMO_MAX) dshTalkMemo.clear();
+  dshTalkMemo.set(key, ok);
+  return ok;
+}
+
+const DSH_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+function dshLogById(root, id, fs) {
+  if (!DSH_SESSION_ID.test(id)) return null;
+  let dirs;
+  try {
+    dirs = fs.readdirSync(root);
+  } catch {
+    return null;
+  }
+  for (const d of dirs.slice(0, 500)) {
+    const file = dshLogFile(path.join(root, d, id), fs);
+    if (file) return { id, file };
+  }
+  return null;
+}
+
+const dshHeaderMemo = new Map();
+
+function dshHeader(file, fs) {
+  const hit = dshHeaderMemo.get(file);
+  if (hit !== undefined) return hit;
+  let h = null;
+  try {
+    const first = zlibMod.zstdDecompressSync ? zlibMod.zstdDecompressSync(fs.readFileSync(file)) : null;
+    const parsed = first ? JSON.parse(first.toString("utf8").split("\n")[0]) : null;
+    if (parsed && parsed.type === "session") h = parsed;
+  } catch {}
+  if (dshHeaderMemo.size >= TITLE_MEMO_MAX) dshHeaderMemo.clear();
+  dshHeaderMemo.set(file, h);
+  return h;
+}
+
 /*
- * 恰好一个活跃会话时返回 { id, title, cwd }；分不出（0 个或多个活跃）就 null。
- * title 可能暂缺（LLM 标题是首轮之后才生成的）——cwd 先到先用，两者不互相拖累。
+ * 子任务会话上溯到它所属的主会话。
+ *
+ * 子会话的头里有 `origin:"subagent"` 和 `parentSession`（dsH 侧写入点见
+ * subagent/child-agent.ts 的 childSessionMeta）。**卡片上「会话名」只有一行**，它要回答的
+ * 是「这些页属于我哪一段对话」——而子任务的标题就是那段委派提示词的开头，盖上去等于把
+ * 用户刚说的话又抄一遍。这条口径与 ZCode 顺着 parent_id 报主会话标题完全一致（那边注释
+ * 原话：「拿 subagent 的名字盖掉主会话的名字是显示错，不是少显示」）。
+ *
+ * 工作区**也一起取主会话的**：子会话虽然继承了父会话的 cwd，但同一条归属链上取回来更硬——
+ * 不去依赖「继承」这个实现细节。
+ *
+ * 父会话解不出来（已被清理、读不动）就停在能解到的那一层：宁可显示子会话，也不显示空。
  */
-export function readDshSession(local, { env = process.env, home = osMod.homedir(), fs = fsMod, now = Date.now() } = {}) {
-  if (!local || !isDshClient(local.clientCommand)) return null;
-  const root = path.join(dshHome({ env, home }), "sessions");
+function dshRootOf(root, start, fs, { maxHops = 8 } = {}) {
+  let cur = start;
+  for (let i = 0; i < maxHops; i++) {
+    const h = dshHeader(cur.file, fs);
+    if (!h || (h.origin !== "subagent" && typeof h.parentSession !== "string")) return cur;
+    const up = typeof h.parentSession === "string" ? dshLogById(root, h.parentSession, fs) : null;
+    if (!up) return cur;
+    cur = up;
+  }
+  return cur;
+}
+
+function dshPickLive(root, fs, now) {
   const live = [];
   let dirs;
   try {
@@ -897,17 +1004,29 @@ export function readDshSession(local, { env = process.env, home = osMod.homedir(
       continue;
     }
     for (const s of subs) {
-      if (!s.startsWith("session-")) continue;
-      const file = path.join(root, d, s, "session.jsonl.zstd");
+      const file = dshLogFile(path.join(root, d, s), fs);
+      if (!file) continue;
       try {
         const st = fs.statSync(file);
         if (now - st.mtimeMs <= DSH_LIVE_WINDOW_MS) live.push({ id: s, file });
       } catch {}
-      if (live.length > 1) return null;
     }
   }
-  if (live.length !== 1) return null;
-  const { id, file } = live[0];
+  const talking = live.length === 1 ? live : live.filter((c) => dshHasConversation(c, fs));
+  return talking.length === 1 ? talking[0] : null;
+}
+
+/*
+ * 恰好一个活跃会话时返回 { id, title, cwd }；分不出（0 个或多个活跃）就 null。
+ * title 可能暂缺（LLM 标题是首轮之后才生成的）——cwd 先到先用，两者不互相拖累。
+ */
+export function readDshSession(local, { env = process.env, home = osMod.homedir(), fs = fsMod, now = Date.now(), meta = null } = {}) {
+  if (!local || !isDshClient(local.clientCommand)) return null;
+  const root = path.join(dshHome({ env, home }), "sessions");
+  const asked = meta && typeof meta === "object" && typeof meta.session_id === "string" ? meta.session_id.trim() : "";
+  const picked = (asked ? dshLogById(root, asked, fs) : null) || dshPickLive(root, fs, now);
+  if (!picked) return null;
+  const { id, file } = dshRootOf(root, picked, fs);
 
   let cwd = dshCwdMemo.get(id);
   const title = memoTitle(`dsh:${file}`, () => {
@@ -954,6 +1073,44 @@ export function readDshSession(local, { env = process.env, home = osMod.homedir(
     dshCwdMemo.set(id, cwd);
   }
   return { id, title: title || null, cwd: cwd || null };
+}
+
+function dshOwnTitle(file, fs) {
+  return memoTitle(`dsh-own:${file}`, () => {
+    let text;
+    try {
+      text = decodeZstdFrames(fs.readFileSync(file));
+    } catch {
+      return null;
+    }
+    if (!text) return null;
+    let found = null;
+    for (const line of text.split("\n")) {
+      if (!line.includes('"session/title"')) continue;
+      try {
+        const ev = JSON.parse(line);
+        if (ev?.type === "session/title") {
+          const t = clip(ev.data?.title, 60);
+          if (t) found = t;
+        }
+      } catch {}
+    }
+    return found;
+  });
+}
+
+export function readDshSubagent(meta, local, { env = process.env, home = osMod.homedir(), fs = fsMod } = {}) {
+  if (!local || !isDshClient(local.clientCommand)) return null;
+  const id = meta && typeof meta === "object" && typeof meta.session_id === "string" ? meta.session_id.trim() : "";
+  if (!id) return null;
+  const own = dshLogById(path.join(dshHome({ env, home }), "sessions"), id, fs);
+  if (!own) return null;
+  const h = dshHeader(own.file, fs);
+  if (!h || (h.origin !== "subagent" && typeof h.parentSession !== "string")) return null;
+  const label = dshOwnTitle(own.file, fs);
+  const type = typeof h.agentPreset === "string" && h.agentPreset ? clip(h.agentPreset, 40) : null;
+  if (!label && !type) return null;
+  return { label: label || null, type };
 }
 
 /* 会话 id 进路径、SQL 与提取流程前的锚（安全边界，勿放宽）：只放行 UUID 形状，`..`、`/`、
@@ -1309,7 +1466,7 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
     const oc = opencodeSessionOf(tool, at, { env, home, fs, exec });
     if (oc?.title) return oc.title;
   }
-  const ds = dsh !== undefined ? dsh : readDshSession(local, { env, home, fs });
+  const ds = dsh !== undefined ? dsh : readDshSession(local, { env, home, fs, meta });
   if (ds?.title) return ds.title;
   const t = readHostSessionTitle(local.hostSessionId, { fs, home, env });
   if (t) return t;
@@ -1330,7 +1487,7 @@ export function readSessionTitle(local, { fs = fsMod, home = osMod.homedir(), en
  */
 export function readSessionIdentity(local, { fs = fsMod, home = osMod.homedir(), env = process.env, exec = execFileSync, alive = pidAlive, meta = null, tmp, tool = null, at = null } = {}) {
   if (!local) return { title: null, workspace: null, workspaceKind: null };
-  const ds = readDshSession(local, { env, home, fs });
+  const ds = readDshSession(local, { env, home, fs, meta });
   const title = readSessionTitle(local, { fs, home, env, exec, alive, meta, dsh: ds, tool, at });
   const agDir = readAntigravityWorkspace(meta, local, { fs, home });
   const oc = isOpencodeClient(local.clientCommand) ? opencodeSessionOf(tool, at, { env, home, fs, exec }) : null;

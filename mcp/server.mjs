@@ -28,7 +28,7 @@ import {
 import { createUpdateNotice } from "./update-notice.mjs";
 import { foregroundGuard } from "./foreground-guard.mjs";
 import { deriveSessionId, pruneClaims } from "./session-id.mjs";
-import { probeLocal, readSessionIdentity, composeAgent, procSource, readClaudeSubagent, antigravityConversationId, codexThreadId, workbuddyConversationId, isOpencodeClient } from "./agent-identity.mjs";
+import { probeLocal, readSessionIdentity, composeAgent, procSource, readClaudeSubagent, readDshSubagent, antigravityConversationId, codexThreadId, workbuddyConversationId, isOpencodeClient } from "./agent-identity.mjs";
 import * as cfgFile from "./config.mjs";
 import { TOOL_TIER, TIER_RANK, REVEAL_REQUIRES_FULL, PARAM_REQUIRES_FULL } from "./tool-tiers.mjs";
 import {
@@ -50,7 +50,7 @@ import {
 import crypto from "node:crypto";
 
 const NAME = "agent-in-chrome";
-const VERSION = "0.55.4";
+const VERSION = "0.55.5";
 /** 本进程起来的时刻。CDP 模式下工具层就在本进程里，它也是「工具层代码的加载时刻」 */
 const PROCESS_STARTED_AT = Date.now();
 const SUPPORTED_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -452,6 +452,7 @@ function agentForFrame() {
   let task = null;
   try {
     if (LOCAL_ID && LAST_TOOL_USE) task = readClaudeSubagent({ "claudecode/toolUseId": LAST_TOOL_USE }, LOCAL_ID);
+    if (!task && LOCAL_ID) task = readDshSubagent(LAST_META, LOCAL_ID);
   } catch {}
   if (!agent) return task ? { task: task.label, taskType: task.type } : null;
   return { ...agent, task: task?.label || null, taskType: task?.type || null };
