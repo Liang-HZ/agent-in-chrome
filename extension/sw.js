@@ -3966,9 +3966,20 @@ function pageAgent(op, arg) {
     let b = box(el);
     let scrolled = false;
     const offscreen = (r) => r.x + r.w <= 0 || r.y + r.h <= 0 || r.x >= vw || r.y >= vh;
+    const SLIVER_MIN_PX = 6;
+    const sliver = (r) => {
+      if (r.x < 0 && r.x + r.w > 0 && r.x + r.w < SLIVER_MIN_PX) return true;
+      if (r.x < vw && r.x + r.w > vw && vw - r.x < SLIVER_MIN_PX) return true;
+      if (r.y < 0 && r.y + r.h > 0 && r.y + r.h < SLIVER_MIN_PX) return true;
+      if (r.y < vh && r.y + r.h > vh && vh - r.y < SLIVER_MIN_PX) return true;
+      return false;
+    };
     if (el.scrollIntoView) {
       if (offscreen(b)) {
         scrolled = scrollIn(el, "center");
+        b = box(el);
+      } else if (sliver(b)) {
+        scrolled = scrollIn(el, "center") || scrolled;
         b = box(el);
       } else {
         const c0 = clipperOf(el);
