@@ -9,7 +9,7 @@
 // 所有 browser_* 工具的实现都在这个文件里（工具表见 TOOLS）。
 
 const HOST_NAME = "org.liangai.agent_in_chrome";
-const VERSION = "0.55.3";
+const VERSION = "0.55.4";
 /* 这个 service worker 实例是什么时候起来的（= 磁盘上的代码是什么时候读进来的），见 hello */
 const SW_BOOTED_AT = Date.now();
 /* agent 开的标签页统一收进这一组，跟用户自己的标签页视觉隔离 */
@@ -7016,6 +7016,13 @@ function markFileInputInPage(ref, selector, token) {
   fired[token] = { change: false, input: false };
   const onChange = () => {
     fired[token].change = true;
+    try {
+      fired[token].filesAtChange = [...el.files].map((f) => ({
+        name: f.name,
+        size: f.size,
+        type: f.type || "",
+      }));
+    } catch {}
   };
   const onInput = () => {
     fired[token].input = true;
@@ -7064,11 +7071,28 @@ function readFileInputInPage(token) {
     };
     el = walk(document);
   }
-  if (!el)
+  if (!el) {
+    const caught = fired.filesAtChange;
+    if (caught) {
+      try {
+        delete regs[token];
+      } catch {}
+      try {
+        delete firedAll[token];
+      } catch {}
+      return {
+        files: caught,
+        count: caught.length,
+        changeFired: nativeChange,
+        inputFired: nativeInput,
+        elementReplaced: true,
+      };
+    }
     return {
       error:
         "上传目标在设置过程中从页面上消失了（页面可能重新渲染或导航过）。重新 browser_read_page 后再试一次。",
     };
+  }
 
   const files = [];
   try {
@@ -10817,6 +10841,7 @@ const TOOLS = {
       },
       changeFired: back.changeFired,
       changeDispatchedManually: back.changeDispatchedManually || undefined,
+      elementReplaced: back.elementReplaced || undefined,
       hint: back.changeFired
         ? undefined
         : "页面没有收到 change 事件，说明它可能并不监听这个输入框。检查上传是否真的开始了。",

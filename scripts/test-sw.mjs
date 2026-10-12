@@ -1286,6 +1286,7 @@ function makeChrome(state) {
             if (!state.noNativeChange) {
               for (const l of target._listeners) if (l.type === "change") l.fn({ type: "change" });
             }
+            if (typeof state.afterSetFiles === "function") state.afterSetFiles(target, scope);
           }
           return cb({});
         }
@@ -10126,6 +10127,72 @@ const B_PATH = "/tmp/aic-upload/b.bin";
   check("标记属性用完就删，不留在用户页面上", Object.keys(avatar._attrs).length === 0, JSON.stringify(avatar._attrs));
   check("监听器用完就摘", avatar._listeners.length === 0, String(avatar._listeners.length));
   check("如实报告 change 已由浏览器触发", r.changeFired === true && r.changeDispatchedManually === undefined, JSON.stringify(r));
+}
+
+{
+  const page = uploadPage();
+  const st = freshState({ page, fileSizes: { [A_PATH]: 123 } });
+  const T = loadSw(st);
+  await T.new_tab({ url: "https://example.com/form" }, "s1");
+  const avatar = page.elements[0];
+  let replaced = false;
+  st.afterSetFiles = (target) => {
+    if (target !== avatar) return;
+    replaced = true;
+    target.isConnected = false;
+    for (const k of Object.keys(target._attrs)) delete target._attrs[k];
+  };
+
+  let r;
+  try {
+    r = await T.upload_file({ selector: "#avatar", files: [A_PATH] }, "s1");
+  } catch (e) {
+    r = { __threw: String(e?.message || e) };
+  }
+  check("换节点：用例本身确实造出了替换（没走空）", replaced, String(replaced));
+  if (r.__threw) {
+    check("换节点：不再误报失败", false, `upload_file 抛了错：${r.__threw}`);
+  } else {
+    check("换节点：不再误报失败", r.count === 1 && r.uploaded?.[0]?.name === "一号.txt", JSON.stringify(r).slice(0, 200));
+    check("换节点：如实带上本机路径", r.uploaded?.[0]?.path === A_PATH, JSON.stringify(r.uploaded));
+    check("换节点：如实标注校验依据换成了 change 时刻的抓拍", r.elementReplaced === true, JSON.stringify(r));
+    check("换节点：changeFired 仍如实为 true", r.changeFired === true, JSON.stringify(r));
+  }
+}
+
+{
+  const page = uploadPage();
+  const st = freshState({ page, fileSizes: { [A_PATH]: 0 } });
+  const T = loadSw(st);
+  await T.new_tab({ url: "https://example.com/form" }, "s1");
+  const avatar = page.elements[0];
+  st.afterSetFiles = (target) => {
+    if (target !== avatar) return;
+    target.isConnected = false;
+    for (const k of Object.keys(target._attrs)) delete target._attrs[k];
+  };
+
+  const t = await throws(
+    () => T.upload_file({ selector: "#avatar", files: [A_PATH], expect: [{ name: "一号.txt", sizeBytes: 123 }] }, "s1"),
+    /没被真正读进去/
+  );
+  check("换节点 + 字节数对不上：照样报错，没被退路盖过去", t.threw && t.match, t.msg);
+}
+
+{
+  const page = uploadPage();
+  const st = freshState({ page, fileSizes: { [A_PATH]: 123 }, noNativeChange: true });
+  const T = loadSw(st);
+  await T.new_tab({ url: "https://example.com/form" }, "s1");
+  const avatar = page.elements[0];
+  st.afterSetFiles = (target) => {
+    if (target !== avatar) return;
+    target.isConnected = false;
+    for (const k of Object.keys(target._attrs)) delete target._attrs[k];
+  };
+
+  const t = await throws(() => T.upload_file({ selector: "#avatar", files: [A_PATH] }, "s1"), /从页面上消失了/);
+  check("换节点但 change 没触发：仍然报错（没有证据不说成功）", t.threw && t.match, t.msg);
 }
 
 {
