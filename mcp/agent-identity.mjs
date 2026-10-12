@@ -621,9 +621,25 @@ export function resetTitleMemo() {
 
 // 顶层 await：只等一个内置模块的 import（微任务级），之后所有读库函数保持同步——
 // 调用方（每帧的身份刷新）是同步上下文，等不起 promise。
-const NODE_SQLITE = await import("node:sqlite")
-  .then((m) => m.DatabaseSync)
-  .catch(() => null);
+//
+// import 本身会把 ExperimentalWarning 打上 stderr（首次加载 node:sqlite 时发一次）。
+// server 走 stdio，stderr 是日志的家，一点噪声都会进客户端的日志面板，一条实验
+// 警告都嫌多。警告是经 process.emitWarning 发出来的，只在这一次 import 的窗口里
+// 换上一张只滤这一条的滤网，走完立刻还原；其余警告原样放行。加
+// process.on("warning") 监听压不掉它——默认打印器照跑。
+const NODE_SQLITE = await (async () => {
+  const origEmitWarning = process.emitWarning;
+  process.emitWarning = function (warning, ...args) {
+    const msg = typeof warning === "string" ? warning : warning?.message;
+    if (typeof msg === "string" && /^SQLite is an experimental feature/.test(msg)) return;
+    return origEmitWarning.call(process, warning, ...args);
+  };
+  try {
+    return (await import("node:sqlite").catch(() => null))?.DatabaseSync ?? null;
+  } finally {
+    process.emitWarning = origEmitWarning;
+  }
+})();
 
 /* 只给测试用：换掉读库实现（传 null 恢复默认），让四家读取器不必真库也能验 */
 let sqliteColumnImpl = null;

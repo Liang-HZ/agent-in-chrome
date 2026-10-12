@@ -257,7 +257,7 @@ function headedUserAgent(bin) {
 export const OWNER_FLAG = "--aic-owner";
 
 export function profileDirFrom(cmd) {
-  const m = /--user-data-dir=(.+?)(?=\s--|$)/.exec(String(cmd || ""));
+  const m = /--user-data-dir=(.+?)(?=\s--|$)/.exec(String(cmd || "").trim());
   return m ? m[1].replace(/^"|"$/g, "") : null;
 }
 

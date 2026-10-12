@@ -3377,6 +3377,7 @@ console.log("\n\x1b[1mM. 孤儿浏览器回收\x1b[0m");
   check("命令行里解析得出 user-data-dir", profileDirFrom("chrome --user-data-dir=/tmp/p --remote-debugging-port=0 about:blank") === "/tmp/p");
   check("路径带空格也解析得完整（Application Support 之流）", profileDirFrom("chrome --user-data-dir=/Users/me/Library/Application Support/x --remote-debugging-port=0") === "/Users/me/Library/Application Support/x", JSON.stringify(profileDirFrom("chrome --user-data-dir=/Users/me/Library/Application Support/x --remote-debugging-port=0")));
   check("没有 user-data-dir 时返回 null（不猜）", profileDirFrom("chrome --headless") === null);
+  check("尾随换行不拦路（/bin/ps -p 单点查询的原样输出）", profileDirFrom("chrome --user-data-dir=/tmp/p\n") === "/tmp/p");
 
   {
     let clock = 0;
